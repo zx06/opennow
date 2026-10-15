@@ -140,7 +140,7 @@ func (b *Backend) Upload(ctx context.Context, revisionID, relPath string, r io.R
 	if err != nil {
 		return err
 	}
- dest := filepath.Join(dir, "files", relPath)
+	dest := filepath.Join(dir, "files", relPath)
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
@@ -292,6 +292,9 @@ func (b *Backend) ListVersions(ctx context.Context, slug string) ([]site.Version
 }
 
 func (b *Backend) Rollback(ctx context.Context, slug, versionID string) (*site.Version, error) {
+	if !validID(slug) || !validID(versionID) {
+		return nil, ErrNotFound
+	}
 	if _, err := os.Stat(b.versionDir(slug, versionID)); err != nil {
 		return nil, ErrNotFound
 	}
@@ -344,6 +347,23 @@ func (b *Backend) ListCurrentFiles(ctx context.Context, slug string) ([]site.Fil
 	return b.listFilesInDir(b.versionDir(slug, meta.CurrentVersion))
 }
 
+// ListVersionFiles lists the files of a specific (possibly non-current) version.
+func (b *Backend) ListVersionFiles(ctx context.Context, slug, versionID string) ([]site.FileInfo, error) {
+	if !validID(slug) || !validID(versionID) {
+		return nil, ErrNotFound
+	}
+	dir := b.versionDir(slug, versionID)
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return nil, ErrNotFound
+	}
+	return b.listFilesInDir(dir)
+}
+
+// validID rejects empty values and anything that could escape a directory.
+func validID(s string) bool {
+	return s != "" && s != "." && !strings.Contains(s, "..") && !strings.ContainsAny(s, "/\\")
+}
+
 func (b *Backend) OpenCurrentFile(ctx context.Context, slug, relPath string) (io.ReadCloser, *site.FileInfo, error) {
 	meta, err := b.readMeta(slug)
 	if err != nil {
@@ -353,6 +373,9 @@ func (b *Backend) OpenCurrentFile(ctx context.Context, slug, relPath string) (io
 }
 
 func (b *Backend) OpenVersionFile(ctx context.Context, slug, versionID, relPath string) (io.ReadCloser, *site.FileInfo, error) {
+	if !validID(slug) || !validID(versionID) {
+		return nil, nil, ErrNotFound
+	}
 	relPath, err := sanitizeRelPath(relPath)
 	if err != nil {
 		return nil, nil, err

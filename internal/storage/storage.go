@@ -26,6 +26,7 @@ type Backend interface {
 	OpenCurrentFile(ctx context.Context, slug, relPath string) (io.ReadCloser, *site.FileInfo, error)
 	OpenVersionFile(ctx context.Context, slug, versionID, relPath string) (io.ReadCloser, *site.FileInfo, error)
 	ListCurrentFiles(ctx context.Context, slug string) ([]site.FileInfo, error)
+	ListVersionFiles(ctx context.Context, slug, versionID string) ([]site.FileInfo, error)
 
 	Overview(ctx context.Context) (*site.StorageOverview, error)
 }

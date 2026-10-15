@@ -95,7 +95,7 @@ func (c *Client) Publish(slug, source string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
- fin, _ := http.NewRequest(http.MethodPost, c.BaseURL+"/api/v1/publish/"+created.RevisionID+"/finalize", nil)
+	fin, _ := http.NewRequest(http.MethodPost, c.BaseURL+"/api/v1/publish/"+created.RevisionID+"/finalize", nil)
 	resp2, err := c.do(fin)
 	if err != nil {
 		return nil, err

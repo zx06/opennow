@@ -5,15 +5,17 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/zx06/opennow/internal/auth"
 	"github.com/zx06/opennow/internal/config"
 	"github.com/zx06/opennow/internal/site"
-	"github.com/zx06/opennow/internal/auth"
 	"github.com/zx06/opennow/internal/storage"
 	"github.com/zx06/opennow/internal/storage/local"
 )
@@ -23,10 +25,67 @@ type Handler struct {
 	cfg      config.Config
 	store    storage.Backend
 	sessions *sessionStore
+	signer   *auth.Signer
 }
 
-func New(cfg config.Config, store storage.Backend) *Handler {
-	return &Handler{cfg: cfg, store: store, sessions: newSessionStore()}
+// PreviewTTL is how long a signed preview link stays valid.
+const PreviewTTL = 24 * time.Hour
+
+// SiteCookieTTL is how long a site unlock cookie stays valid.
+const SiteCookieTTL = 7 * 24 * time.Hour
+
+func New(cfg config.Config, store storage.Backend, signer *auth.Signer) *Handler {
+	if signer == nil {
+		signer = auth.NewSigner(cfg.Secret)
+	}
+	return &Handler{cfg: cfg, store: store, sessions: newSessionStore(), signer: signer}
+}
+
+// IsAdmin reports whether the request carries a valid admin session.
+func (h *Handler) IsAdmin(r *http.Request) bool {
+	c, err := r.Cookie(sessionCookie)
+	return err == nil && h.sessions.valid(c.Value)
+}
+
+// MetaView is the public JSON shape of site metadata (never exposes the password hash).
+type MetaView struct {
+	Slug           string     `json:"slug"`
+	CurrentVersion string     `json:"current_version"`
+	HasPassword    bool       `json:"has_password"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+func viewMeta(m *site.Meta) MetaView {
+	return MetaView{
+		Slug:           m.Slug,
+		CurrentVersion: m.CurrentVersion,
+		HasPassword:    m.PasswordHash != "",
+		ExpiresAt:      m.ExpiresAt,
+		CreatedAt:      m.CreatedAt,
+		UpdatedAt:      m.UpdatedAt,
+	}
+}
+
+// VersionView enriches a version with stats and preview link for the admin UI.
+type VersionView struct {
+	ID         string    `json:"id"`
+	CreatedAt  time.Time `json:"created_at"`
+	Current    bool      `json:"current"`
+	FileCount  int       `json:"file_count"`
+	TotalBytes int64     `json:"total_bytes"`
+	PreviewURL string    `json:"preview_url"`
+}
+
+// PreviewPath is the server-relative preview URL of a version (admin session required).
+func PreviewPath(slug, versionID string) string {
+	return "/_preview/" + url.PathEscape(slug) + "/" + url.PathEscape(versionID) + "/"
+}
+
+func (h *Handler) signedPreviewURL(slug, versionID string) string {
+	tok := h.signer.PreviewToken(slug, versionID, time.Now().Add(PreviewTTL))
+	return h.cfg.PublicURL + PreviewPath(slug, versionID) + "?token=" + url.QueryEscape(tok)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -46,6 +105,7 @@ func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/sites/{slug}", h.deleteSite)
 	mux.HandleFunc("PATCH /api/v1/sites/{slug}", h.patchSite)
 	mux.HandleFunc("GET /api/v1/sites/{slug}/versions", h.listVersions)
+	mux.HandleFunc("GET /api/v1/sites/{slug}/versions/{versionId}/files", h.listVersionFiles)
 	mux.HandleFunc("POST /api/v1/sites/{slug}/rollback", h.rollback)
 	mux.HandleFunc("POST /api/v1/sites/{slug}/unlock", h.unlockSite)
 
@@ -150,7 +210,10 @@ func (h *Handler) getSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	files, _ := h.store.ListCurrentFiles(r.Context(), slug)
-	writeJSON(w, http.StatusOK, map[string]any{"meta": meta, "files": files})
+	if files == nil {
+		files = []site.FileInfo{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"meta": viewMeta(meta), "files": files, "urls": h.siteURLs(slug)})
 }
 
 func (h *Handler) deleteSite(w http.ResponseWriter, r *http.Request) {
@@ -221,7 +284,7 @@ func (h *Handler) patchSite(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"meta": meta})
+	writeJSON(w, http.StatusOK, map[string]any{"meta": viewMeta(meta)})
 }
 
 func (h *Handler) listVersions(w http.ResponseWriter, r *http.Request) {
@@ -229,12 +292,59 @@ func (h *Handler) listVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := r.PathValue("slug")
+	meta, err := h.store.GetMeta(r.Context(), slug)
+	if err != nil {
+		if errors.Is(err, local.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "站点不存在"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 	vers, err := h.store.ListVersions(r.Context(), slug)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"versions": vers})
+	out := make([]VersionView, 0, len(vers))
+	for _, v := range vers {
+		vv := VersionView{
+			ID:         v.ID,
+			CreatedAt:  v.CreatedAt,
+			Current:    v.ID == meta.CurrentVersion,
+			PreviewURL: h.signedPreviewURL(slug, v.ID),
+		}
+		if files, err := h.store.ListVersionFiles(r.Context(), slug, v.ID); err == nil {
+			vv.FileCount = len(files)
+			for _, f := range files {
+				vv.TotalBytes += f.Size
+			}
+		}
+		out = append(out, vv)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	writeJSON(w, http.StatusOK, map[string]any{"versions": out, "current_version": meta.CurrentVersion})
+}
+
+func (h *Handler) listVersionFiles(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	slug, ver := r.PathValue("slug"), r.PathValue("versionId")
+	files, err := h.store.ListVersionFiles(r.Context(), slug, ver)
+	if err != nil {
+		if errors.Is(err, local.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "版本不存在"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if files == nil {
+		files = []site.FileInfo{}
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	writeJSON(w, http.StatusOK, map[string]any{"files": files, "preview_url": h.signedPreviewURL(slug, ver)})
 }
 
 func (h *Handler) rollback(w http.ResponseWriter, r *http.Request) {
@@ -283,23 +393,44 @@ func (h *Handler) unlockSite(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "密码错误"})
 		return
 	}
-	cookiePath := siteCookiePath(r, slug)
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SiteAuthCookieName(slug),
-		Value:    "1",
-		Path:     cookiePath,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   7 * 24 * 3600,
-	})
+	h.SetSiteCookie(w, slug, meta.PasswordHash, h.SiteCookiePath(r, slug))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func siteCookiePath(r *http.Request, slug string) string {
-	if strings.HasPrefix(r.URL.Path, "/"+slug) {
-		return "/" + slug + "/"
+// SetSiteCookie issues an HMAC-signed unlock cookie for slug.
+func (h *Handler) SetSiteCookie(w http.ResponseWriter, slug, passwordHash, cookiePath string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     auth.SiteAuthCookieName(slug),
+		Value:    h.signer.SiteCookieValue(slug, passwordHash, time.Now().Add(SiteCookieTTL)),
+		Path:     cookiePath,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(SiteCookieTTL / time.Second),
+	})
+}
+
+// SiteAuthed verifies the signed unlock cookie for slug.
+func (h *Handler) SiteAuthed(r *http.Request, slug, passwordHash string) bool {
+	c, err := r.Cookie(auth.SiteAuthCookieName(slug))
+	if err != nil {
+		return false
 	}
-	return "/"
+	return h.signer.VerifySiteCookie(c.Value, slug, passwordHash, time.Now())
+}
+
+// SiteCookiePath scopes the unlock cookie to the site: "/" when the request is
+// on the site's own subdomain, otherwise "/<slug>/".
+func (h *Handler) SiteCookiePath(r *http.Request, slug string) string {
+	if h.cfg.SubdomainMode && h.cfg.BaseDomain != "" {
+		host := r.Host
+		if i := strings.LastIndex(host, ":"); i >= 0 && !strings.Contains(host[i:], "]") {
+			host = host[:i]
+		}
+		if strings.EqualFold(host, slug+"."+h.cfg.BaseDomain) {
+			return "/"
+		}
+	}
+	return "/" + slug + "/"
 }
 
 func (h *Handler) createPublish(w http.ResponseWriter, r *http.Request) {

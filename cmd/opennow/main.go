@@ -57,6 +57,7 @@ func usage() {
   OPENNOW_ADDR         监听地址（默认 :8080）
   OPENNOW_BASE_DOMAIN  子域名模式后缀（如 xuzhuo.xyz）
   OPENNOW_PUBLIC_URL   路径模式公开 URL 前缀
+  OPENNOW_SECRET       Cookie/预览令牌签名密钥（默认自动生成 <DATA_DIR>/secret.key）
 
 `)
 }
@@ -73,6 +74,9 @@ func runServe(args []string) {
 	}
 	if *dataDir != "" {
 		cfg.DataDir = *dataDir
+	}
+	if err := cfg.EnsureSecret(); err != nil {
+		log.Fatalf("初始化签名密钥失败: %v", err)
 	}
 	store, err := storage.Open(cfg.Backend, cfg.DataDir)
 	if err != nil {

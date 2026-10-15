@@ -52,3 +52,6 @@ func (b *Backend) ListCurrentFiles(ctx context.Context, slug string) ([]site.Fil
 func (b *Backend) Overview(ctx context.Context) (*site.StorageOverview, error) {
 	return nil, ErrNotImplemented
 }
+func (b *Backend) ListVersionFiles(ctx context.Context, slug, versionID string) ([]site.FileInfo, error) {
+	return nil, ErrNotImplemented
+}

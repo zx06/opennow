@@ -1,22 +1,27 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
 // Config holds runtime settings from flags and environment.
 type Config struct {
-	Addr         string
-	DataDir      string
-	Backend      string
-	APIKey       string
-	BaseDomain   string
-	AdminPrefix  string
-	AdminHost    string
-	PublicURL    string
-	PathMode     bool
+	Addr          string
+	DataDir       string
+	Backend       string
+	APIKey        string
+	BaseDomain    string
+	AdminPrefix   string
+	AdminHost     string
+	PublicURL     string
+	PathMode      bool
 	SubdomainMode bool
+	// Secret signs unlock cookies and preview tokens (OPENNOW_SECRET).
+	Secret string
 }
 
 func FromEnv() Config {
@@ -31,6 +36,7 @@ func FromEnv() Config {
 		PublicURL:     strings.TrimRight(os.Getenv("OPENNOW_PUBLIC_URL"), "/"),
 		PathMode:      envBool("OPENNOW_PATH_MODE", true),
 		SubdomainMode: envBool("OPENNOW_SUBDOMAIN_MODE", true),
+		Secret:        os.Getenv("OPENNOW_SECRET"),
 	}
 	if !strings.HasSuffix(c.AdminPrefix, "/") {
 		c.AdminPrefix += "/"
@@ -54,4 +60,26 @@ func envBool(k string, def bool) bool {
 		return def
 	}
 	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+}
+
+// EnsureSecret fills c.Secret from OPENNOW_SECRET or a persisted random key at
+// <DataDir>/secret.key (created with 0600 permissions on first start).
+func (c *Config) EnsureSecret() error {
+	if c.Secret != "" {
+		return nil
+	}
+	if err := os.MkdirAll(c.DataDir, 0o755); err != nil {
+		return err
+	}
+	p := filepath.Join(c.DataDir, "secret.key")
+	if b, err := os.ReadFile(p); err == nil && len(strings.TrimSpace(string(b))) >= 32 {
+		c.Secret = strings.TrimSpace(string(b))
+		return nil
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return err
+	}
+	c.Secret = hex.EncodeToString(buf)
+	return os.WriteFile(p, []byte(c.Secret+"\n"), 0o600)
 }
