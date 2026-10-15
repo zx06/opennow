@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>opennow 管理</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #111; }
+    body { max-width: 960px; margin: 0 auto; padding: 1rem; }
+    header { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+    input, button, select { padding: .45rem .6rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { border-bottom: 1px solid #ddd; text-align: left; padding: .5rem; vertical-align: top; }
+    .muted { color: #666; font-size: .9rem; }
+    .drop { border: 2px dashed #aaa; padding: 2rem; text-align: center; margin: 1rem 0; border-radius: 8px; }
+    .drop.drag { border-color: #06c; background: #f0f8ff; }
+    .error { color: #c00; }
+    .ok { color: #080; }
+    dialog { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; max-width: 32rem; }
+  </style>
+  <script defer src="alpine.min.js"></script>
+</head>
+<body x-data="adminApp()" x-init="init()">
+  <header>
+    <h1 style="margin:0">opennow</h1>
+    <template x-if="!authed">
+      <form @submit.prevent="login" style="display:flex;gap:.5rem;flex:1">
+        <input type="password" x-model="apiKey" placeholder="API 密钥" required style="flex:1">
+        <button type="submit">登录</button>
+      </form>
+    </template>
+    <template x-if="authed">
+      <div style="display:flex;gap:.5rem;flex:1;align-items:center">
+        <input type="search" x-model="query" placeholder="搜索 slug…" style="flex:1" @input="loadSites">
+        <button type="button" @click="logout">退出</button>
+      </div>
+    </template>
+  </header>
+
+  <p x-show="flash" :class="flashIsOk ? 'ok' : 'error'" x-text="flash"></p>
+
+  <template x-if="authed">
+    <div>
+      <section class="muted" x-show="overview">
+        存储：<span x-text="overview?.backend"></span> ·
+        站点 <span x-text="overview?.site_count"></span> ·
+        约 <span x-text="formatBytes(overview?.total_bytes||0)"></span>
+        <span x-show="overview?.data_path"> · 路径 <span x-text="overview?.data_path"></span></span>
+      </section>
+
+      <section class="drop" :class="dragging ? 'drag' : ''"
+        @dragover.prevent="dragging=true"
+        @dragleave.prevent="dragging=false"
+        @drop.prevent="onDrop($event)">
+        <p>拖放文件、文件夹或 ZIP 到此处发布</p>
+        <p class="muted">也可选择：<input type="file" multiple @change="onFiles($event.target.files)"></p>
+        <p><label>指定 slug（可选） <input x-model="publishSlug" placeholder="留空则自动生成"></label></p>
+      </section>
+
+      <table>
+        <thead><tr><th>Slug</th><th>更新</th><th>访问</th><th>操作</th></tr></thead>
+        <tbody>
+          <template x-for="s in sites" :key="s.slug">
+            <tr>
+              <td><strong x-text="s.slug"></strong><br><span class="muted" x-text="s.current_version?.slice(0,8)+'…'"></span></td>
+              <td x-text="formatTime(s.updated_at)"></td>
+              <td>
+                <span x-show="s.has_password">🔒</span>
+                <span x-show="s.expires_at" class="muted">到期 <span x-text="formatTime(s.expires_at)"></span></span>
+              </td>
+              <td>
+                <button type="button" @click="openSite(s.slug)">版本</button>
+                <button type="button" @click="deleteSite(s.slug)">删除</button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </template>
+
+  <dialog x-ref="verDlg">
+    <h2 x-text="'版本：' + (detail?.meta?.slug || '')"></h2>
+    <template x-if="detail">
+      <div>
+        <p class="muted">文件数 <span x-text="detail.files?.length"></span></p>
+        <label>访问密码 <input type="password" x-model="editPassword" placeholder="留空清除"></label>
+        <label>到期 (RFC3339) <input x-model="editExpiry" placeholder="2026-12-31T00:00:00Z"></label>
+        <button type="button" @click="saveAccess">保存访问设置</button>
+        <ul>
+          <template x-for="v in versions" :key="v.id">
+            <li>
+              <code x-text="v.id.slice(0,8)+'…'"></code>
+              <span class="muted" x-text="formatTime(v.created_at)"></span>
+              <button type="button" @click="rollback(v.id)">回滚</button>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </template>
+    <button type="button" @click="$refs.verDlg.close()">关闭</button>
+  </dialog>
+
+<script>
+function adminApp() {
+  return {
+    authed: false,
+    apiKey: '',
+    query: '',
+    sites: [],
+    overview: null,
+    flash: '',
+    flashIsOk: true,
+    dragging: false,
+    publishSlug: '',
+    detail: null,
+    versions: [],
+    editPassword: '',
+    editExpiry: '',
+    async init() {
+      try {
+        const r = await fetch('/api/v1/auth/me');
+        this.authed = r.ok;
+        if (this.authed) await this.refresh();
+      } catch (e) {}
+    },
+    async login() {
+      const r = await fetch('/api/v1/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({api_key: this.apiKey})
+      });
+      if (!r.ok) { this.flashErr(await errMsg(r)); return; }
+      this.authed = true;
+      this.apiKey = '';
+      this.msgOk('已登录');
+      await this.refresh();
+    },
+    async logout() {
+      await fetch('/api/v1/auth/logout', {method:'POST'});
+      this.authed = false;
+      this.sites = [];
+    },
+    async refresh() {
+      await Promise.all([this.loadSites(), this.loadOverview()]);
+    },
+    async loadOverview() {
+      const r = await fetch('/api/v1/storage/overview');
+      if (r.ok) this.overview = await r.json();
+    },
+    async loadSites() {
+      const q = this.query ? '?q=' + encodeURIComponent(this.query) : '';
+      const r = await fetch('/api/v1/sites' + q);
+      if (!r.ok) return;
+      const j = await r.json();
+      this.sites = j.sites || [];
+    },
+    async onDrop(ev) {
+      this.dragging = false;
+      const items = ev.dataTransfer.items;
+      if (items && items.length) {
+        const files = [];
+        for (const it of items) {
+          if (it.kind === 'file') {
+            const f = it.getAsFile();
+            if (f) files.push(f);
+          }
+        }
+        if (files.length) return this.publishFiles(files);
+      }
+      if (ev.dataTransfer.files?.length) return this.publishFiles([...ev.dataTransfer.files]);
+    },
+    onFiles(list) {
+      this.publishFiles([...list]);
+    },
+    async publishFiles(files) {
+      try {
+        this.msgOk('发布中…');
+        const rev = await this.apiCreate(this.publishSlug);
+        for (const f of files) {
+          const path = f.webkitRelativePath || f.name;
+          await fetch('/api/v1/publish/' + rev.revision_id + '/files/' + encodeURIComponent(path).replace(/%2F/g,'/'), {
+            method: 'PUT',
+            body: f
+          });
+        }
+        const fin = await fetch('/api/v1/publish/' + rev.revision_id + '/finalize', {method:'POST'});
+        if (!fin.ok) throw new Error(await errMsg(fin));
+        const out = await fin.json();
+        this.msgOk('已发布：' + out.slug);
+        this.publishSlug = '';
+        await this.refresh();
+      } catch (e) {
+        this.flashErr(e.message || String(e));
+      }
+    },
+    async apiCreate(slug) {
+      const r = await fetch('/api/v1/publish', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({slug: slug || ''})
+      });
+      if (!r.ok) throw new Error(await errMsg(r));
+      return r.json();
+    },
+    async openSite(slug) {
+      const [d, v] = await Promise.all([
+        fetch('/api/v1/sites/' + encodeURIComponent(slug)),
+        fetch('/api/v1/sites/' + encodeURIComponent(slug) + '/versions')
+      ]);
+      this.detail = d.ok ? await d.json() : null;
+      this.versions = v.ok ? (await v.json()).versions || [] : [];
+      this.editPassword = '';
+      this.editExpiry = this.detail?.meta?.expires_at || '';
+      this.$refs.verDlg.showModal();
+    },
+    async saveAccess() {
+      const slug = this.detail.meta.slug;
+      const body = {};
+      if (this.editPassword) body.password = this.editPassword;
+      else body.clear_password = true;
+      if (this.editExpiry) body.expires_at = this.editExpiry;
+      else body.clear_expiry = true;
+      const r = await fetch('/api/v1/sites/' + encodeURIComponent(slug), {
+        method: 'PATCH',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(body)
+      });
+      if (!r.ok) { this.flashErr(await errMsg(r)); return; }
+      this.msgOk('已保存');
+      await this.refresh();
+      await this.openSite(slug);
+    },
+    async rollback(versionId) {
+      const slug = this.detail.meta.slug;
+      const r = await fetch('/api/v1/sites/' + encodeURIComponent(slug) + '/rollback', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({version_id: versionId})
+      });
+      if (!r.ok) { this.flashErr(await errMsg(r)); return; }
+      this.msgOk('已回滚');
+      await this.refresh();
+      await this.openSite(slug);
+    },
+    async deleteSite(slug) {
+      if (!confirm('删除站点 ' + slug + '？')) return;
+      const r = await fetch('/api/v1/sites/' + encodeURIComponent(slug), {method:'DELETE'});
+      if (!r.ok) { this.flashErr(await errMsg(r)); return; }
+      this.msgOk('已删除');
+      await this.refresh();
+    },
+    formatTime(t) {
+      if (!t) return '—';
+      try { return new Date(t).toLocaleString('zh-CN'); } catch { return t; }
+    },
+    formatBytes(n) {
+      if (n < 1024) return n + ' B';
+      if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+      return (n/1024/1024).toFixed(1) + ' MB';
+    },
+    msgOk(m) { this.flash = m; this.flashIsOk = true; },
+    flashErr(m) { this.flash = m; this.flashIsOk = false; }
+  };
+}
+async function errMsg(r) {
+  try { const j = await r.json(); return j.error || r.statusText; } catch { return r.statusText; }
+}
+</script>
+</body>
+</html>
