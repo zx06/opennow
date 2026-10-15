@@ -30,6 +30,9 @@ function adminApp() {
       this.authed = false; this.sites = []; this.overview = null;
     },
     async refresh() { await Promise.all([this.loadSites(), this.loadOverview()]); },
+    backendLabel(b) {
+      return ({ local: '本地磁盘', s3: 'S3 兼容', r2: 'Cloudflare R2', github: 'GitHub 仓库' })[b] || b || '—';
+    },
     async loadOverview() { const r = await api('/storage/overview'); if (r.ok) this.overview = await r.json(); },
     async loadSites() {
       const q = this.query ? '?q=' + encodeURIComponent(this.query) : '';

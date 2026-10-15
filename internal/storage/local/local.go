@@ -14,12 +14,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/zx06/opennow/internal/site"
+	"github.com/zx06/opennow/internal/storage/storeerr"
 )
 
+// Sentinel errors are shared with the other backends via storeerr so callers
+// can match them regardless of which backend is configured.
 var (
-	ErrNotFound      = errors.New("not found")
-	ErrDraftNotFound = errors.New("draft revision not found")
-	ErrInvalidPath   = errors.New("invalid path")
+	ErrNotFound      = storeerr.ErrNotFound
+	ErrDraftNotFound = storeerr.ErrDraftNotFound
+	ErrInvalidPath   = storeerr.ErrInvalidPath
 )
 
 // Backend stores sites on local disk.
@@ -409,5 +412,7 @@ func (b *Backend) Overview(ctx context.Context) (*site.StorageOverview, error) {
 		SiteCount:  len(sites),
 		TotalBytes: total,
 		DataPath:   b.Root,
+		Location:   b.Root,
+		Details:    []site.Detail{{Label: "数据目录", Value: b.Root}},
 	}, nil
 }

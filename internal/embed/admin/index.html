@@ -53,9 +53,27 @@
       <section class="stats">
         <div class="card stat"><div class="stat-label">站点</div><div class="stat-value num" x-text="overview?.site_count ?? sites.length"></div></div>
         <div class="card stat"><div class="stat-label">占用空间</div><div class="stat-value num" x-text="formatBytes(overview?.total_bytes || 0)"></div></div>
-        <div class="card stat"><div class="stat-label">存储后端</div><div class="stat-value" x-text="overview?.backend || '—'"></div></div>
-        <div class="card stat"><div class="stat-label">数据目录</div><div class="stat-value small" :title="overview?.data_path" x-text="overview?.data_path || '—'"></div></div>
+        <div class="card stat"><div class="stat-label">存储后端</div><div class="stat-value" x-text="backendLabel(overview?.backend)"></div></div>
+        <div class="card stat"><div class="stat-label">存储位置</div><div class="stat-value small" :title="overview?.location || overview?.data_path" x-text="overview?.location || overview?.data_path || '—'"></div></div>
       </section>
+
+      <details class="card storage-details" x-show="overview?.details?.length">
+        <summary>
+          <span>存储详情</span>
+          <span class="badge" x-text="backendLabel(overview?.backend)"></span>
+          <button class="btn btn-sm" type="button" @click.prevent="loadOverview()">刷新</button>
+        </summary>
+        <div class="card-body">
+          <dl class="kv">
+            <template x-for="d in (overview?.details || [])" :key="d.label">
+              <div><dt x-text="d.label"></dt><dd class="mono" x-text="d.value"></dd></div>
+            </template>
+          </dl>
+          <ul class="notes" x-show="overview?.notes?.length">
+            <template x-for="n in (overview?.notes || [])" :key="n"><li x-text="n"></li></template>
+          </ul>
+        </div>
+      </details>
 
       <section class="card">
         <div class="card-head">

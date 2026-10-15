@@ -17,7 +17,7 @@ import (
 	"github.com/zx06/opennow/internal/config"
 	"github.com/zx06/opennow/internal/site"
 	"github.com/zx06/opennow/internal/storage"
-	"github.com/zx06/opennow/internal/storage/local"
+	"github.com/zx06/opennow/internal/storage/storeerr"
 )
 
 // Handler serves the public admin JSON API.
@@ -202,7 +202,7 @@ func (h *Handler) getSite(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	meta, err := h.store.GetMeta(r.Context(), slug)
 	if err != nil {
-		if errors.Is(err, local.ErrNotFound) {
+		if errors.Is(err, storeerr.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "站点不存在"})
 			return
 		}
@@ -235,7 +235,7 @@ func (h *Handler) patchSite(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	meta, err := h.store.GetMeta(r.Context(), slug)
 	if err != nil {
-		if errors.Is(err, local.ErrNotFound) {
+		if errors.Is(err, storeerr.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "站点不存在"})
 			return
 		}
@@ -294,7 +294,7 @@ func (h *Handler) listVersions(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	meta, err := h.store.GetMeta(r.Context(), slug)
 	if err != nil {
-		if errors.Is(err, local.ErrNotFound) {
+		if errors.Is(err, storeerr.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "站点不存在"})
 			return
 		}
@@ -333,7 +333,7 @@ func (h *Handler) listVersionFiles(w http.ResponseWriter, r *http.Request) {
 	slug, ver := r.PathValue("slug"), r.PathValue("versionId")
 	files, err := h.store.ListVersionFiles(r.Context(), slug, ver)
 	if err != nil {
-		if errors.Is(err, local.ErrNotFound) {
+		if errors.Is(err, storeerr.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "版本不存在"})
 			return
 		}
@@ -361,7 +361,7 @@ func (h *Handler) rollback(w http.ResponseWriter, r *http.Request) {
 	}
 	v, err := h.store.Rollback(r.Context(), slug, body.VersionID)
 	if err != nil {
-		if errors.Is(err, local.ErrNotFound) {
+		if errors.Is(err, storeerr.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "版本不存在"})
 			return
 		}
@@ -460,8 +460,16 @@ func (h *Handler) uploadFile(w http.ResponseWriter, r *http.Request) {
 	fp := r.PathValue("filepath")
 	fp = path.Clean(fp)
 	if err := h.store.Upload(r.Context(), rev, fp, r.Body, r.ContentLength); err != nil {
-		if errors.Is(err, local.ErrDraftNotFound) {
+		if errors.Is(err, storeerr.ErrDraftNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "修订不存在"})
+			return
+		}
+		if errors.Is(err, storeerr.ErrTooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, storeerr.ErrInvalidPath) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "非法路径"})
 			return
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -477,7 +485,7 @@ func (h *Handler) finalizePublish(w http.ResponseWriter, r *http.Request) {
 	rev := r.PathValue("revisionId")
 	v, slug, err := h.store.Finalize(r.Context(), rev)
 	if err != nil {
-		if errors.Is(err, local.ErrDraftNotFound) {
+		if errors.Is(err, storeerr.ErrDraftNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "修订不存在"})
 			return
 		}

@@ -58,6 +58,11 @@ func usage() {
   OPENNOW_BASE_DOMAIN  子域名模式后缀（如 xuzhuo.xyz）
   OPENNOW_PUBLIC_URL   路径模式公开 URL 前缀
   OPENNOW_SECRET       Cookie/预览令牌签名密钥（默认自动生成 <DATA_DIR>/secret.key）
+  OPENNOW_STORAGE      存储后端：local（默认）| s3 | r2 | github
+                       s3: OPENNOW_S3_ENDPOINT/REGION/BUCKET/PREFIX/ACCESS_KEY_ID/SECRET_ACCESS_KEY/PATH_STYLE
+                       r2: OPENNOW_R2_ACCOUNT_ID/BUCKET/ACCESS_KEY_ID/SECRET_ACCESS_KEY/PREFIX
+                       github: OPENNOW_GITHUB_TOKEN/REPO(owner/repo)/BRANCH/PREFIX
+                       详见 README
 
 `)
 }

@@ -13,9 +13,64 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
+      - name: Vet
+        run: CGO_ENABLED=0 go vet ./...
       - name: Test
         run: CGO_ENABLED=0 go test ./...
       - name: Build linux/amd64
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o opennow ./cmd/opennow
       - name: Docker build
         run: docker build -t opennow:ci .
+
+  # S3 / R2 code path against a real MinIO server. MinIO no longer publishes
+  # community binaries or images, so it is built from source (and cached).
+  s3-integration:
+    runs-on: ubuntu-latest
+    env:
+      MINIO_VERSION: RELEASE.2025-09-07T16-13-09Z
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: Cache MinIO binary
+        id: minio-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/minio-bin
+          key: minio-${{ env.MINIO_VERSION }}-linux-amd64
+      - name: Build MinIO
+        if: steps.minio-cache.outputs.cache-hit != 'true'
+        run: GOBIN=$HOME/minio-bin CGO_ENABLED=0 go install github.com/minio/minio@${MINIO_VERSION}
+      - name: Start MinIO
+        run: |
+          mkdir -p /tmp/minio-data
+          MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin \
+            nohup ~/minio-bin/minio server /tmp/minio-data --address 127.0.0.1:9000 > /tmp/minio.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          cat /tmp/minio.log; exit 1
+      - name: Integration tests
+        env:
+          OPENNOW_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          OPENNOW_TEST_S3_ACCESS_KEY: minioadmin
+          OPENNOW_TEST_S3_SECRET_KEY: minioadmin
+        run: CGO_ENABLED=0 go test ./internal/storage/s3/ -run Integration -v -count=1
+
+  # Optional: runs only when the repository defines the variable
+  # OPENNOW_TEST_GITHUB_REPO and the secret OPENNOW_TEST_GITHUB_TOKEN.
+  github-e2e:
+    if: ${{ vars.OPENNOW_TEST_GITHUB_REPO != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: GitHub storage E2E
+        env:
+          OPENNOW_TEST_GITHUB_REPO: ${{ vars.OPENNOW_TEST_GITHUB_REPO }}
+          OPENNOW_TEST_GITHUB_TOKEN: ${{ secrets.OPENNOW_TEST_GITHUB_TOKEN }}
+        run: CGO_ENABLED=0 go test ./internal/storage/github/ -run E2E -v -count=1

@@ -17,7 +17,7 @@ import (
 	"github.com/zx06/opennow/internal/auth"
 	"github.com/zx06/opennow/internal/config"
 	"github.com/zx06/opennow/internal/storage"
-	"github.com/zx06/opennow/internal/storage/local"
+	"github.com/zx06/opennow/internal/storage/storeerr"
 )
 
 // Server is the HTTP front door for sites and admin.
@@ -74,7 +74,7 @@ func (s *Server) serveRoot(w http.ResponseWriter, r *http.Request) {
 
 	meta, err := s.store.GetMeta(r.Context(), slug)
 	if err != nil {
-		if errors.Is(err, local.ErrNotFound) {
+		if errors.Is(err, storeerr.ErrNotFound) {
 			http.NotFound(w, r)
 			return
 		}
@@ -111,13 +111,13 @@ func (s *Server) serveRoot(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveVersionFile(w http.ResponseWriter, r *http.Request, slug, versionID, rel string) {
 	rc, info, err := s.store.OpenVersionFile(r.Context(), slug, versionID, rel)
 	if err != nil {
-		if errors.Is(err, local.ErrNotFound) && !strings.HasSuffix(rel, "index.html") {
+		if errors.Is(err, storeerr.ErrNotFound) && !strings.HasSuffix(rel, "index.html") {
 			rel = path.Join(strings.TrimSuffix(rel, "/"), "index.html")
 			rc, info, err = s.store.OpenVersionFile(r.Context(), slug, versionID, rel)
 		}
 	}
 	if err != nil {
-		if errors.Is(err, local.ErrNotFound) {
+		if errors.Is(err, storeerr.ErrNotFound) {
 			http.NotFound(w, r)
 			return
 		}

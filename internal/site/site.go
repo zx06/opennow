@@ -51,4 +51,17 @@ type StorageOverview struct {
 	SiteCount  int    `json:"site_count"`
 	TotalBytes int64  `json:"total_bytes"`
 	DataPath   string `json:"data_path,omitempty"`
+	// Location is a short human-readable description of where data lives
+	// (bucket/prefix, owner/repo@branch, directory).
+	Location string `json:"location,omitempty"`
+	// Details lists backend-specific configuration and runtime stats.
+	Details []Detail `json:"details,omitempty"`
+	// Notes lists backend limitations worth surfacing in the admin UI.
+	Notes []string `json:"notes,omitempty"`
+}
+
+// Detail is one label/value row in the storage overview.
+type Detail struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
 }

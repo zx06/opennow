@@ -60,6 +60,19 @@ h1, h2, h3 { margin: 0; line-height: 1.25; }
 .stat { padding: 16px 18px; }
 .stat-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 .stat-value { font-size: 22px; font-weight: 700; margin-top: 4px; letter-spacing: -.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.storage-details { margin-top: 16px; }
+.storage-details > summary { display: flex; align-items: center; gap: 10px; padding: 14px 20px; cursor: pointer; font-weight: 650; font-size: 14px; list-style: none; }
+.storage-details > summary::-webkit-details-marker { display: none; }
+.storage-details > summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+.storage-details[open] > summary::before { transform: rotate(90deg); }
+.storage-details > summary .btn { margin-left: auto; }
+.storage-details .card-body { padding-top: 0; }
+.kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px 20px; margin: 0; }
+.kv > div { min-width: 0; }
+.kv dt { color: var(--muted); font-size: 12px; }
+.kv dd { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.notes { margin: 14px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; }
+.notes li + li { margin-top: 4px; }
 .stat-value.small { font-size: 13px; font-weight: 500; font-family: var(--mono); margin-top: 10px; }
 
 /* forms */
