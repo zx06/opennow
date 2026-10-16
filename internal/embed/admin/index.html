@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>opennow 管理后台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%229%22 fill=%22%236366f1%22/%3E%3Ctext x=%2216%22 y=%2222%22 font-size=%2218%22 text-anchor=%22middle%22 fill=%22white%22 font-family=%22sans-serif%22 font-weight=%22800%22%3Eo%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="admin.css">
+  <script defer src="app.js"></script>
+  <script defer src="alpine.min.js"></script>
+</head>
+<body x-data="adminApp()" x-init="init()">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand"><div class="brand-mark">o</div><div>opennow <small>静态站点发布</small></div></div>
+      <div class="spacer"></div>
+      <template x-if="authed">
+        <div style="display:flex;gap:10px;align-items:center;flex:1;justify-content:flex-end">
+          <div class="search">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input class="input" type="search" x-model="query" placeholder="搜索站点…" @input.debounce.250ms="loadSites">
+          </div>
+          <button class="btn btn-ghost" type="button" @click="refresh" title="刷新">刷新</button>
+          <button class="btn" type="button" @click="logout">退出</button>
+        </div>
+      </template>
+    </div>
+  </header>
+
+  <!-- 登录 -->
+  <template x-if="ready && !authed">
+    <div class="login-wrap">
+      <div class="card login">
+        <h1>欢迎回来</h1>
+        <p>输入服务端配置的 <code>OPENNOW_API_KEY</code> 登录管理后台。</p>
+        <form @submit.prevent="login">
+          <div class="field">
+            <label for="apikey">API 密钥</label>
+            <input id="apikey" class="input" type="password" x-model="apiKey" placeholder="••••••••" required autofocus>
+          </div>
+          <button class="btn btn-primary" type="submit" :disabled="busy">
+            <span x-show="busy" class="spin"></span>登录
+          </button>
+        </form>
+      </div>
+    </div>
+  </template>
+
+  <!-- 主界面 -->
+  <template x-if="authed">
+    <main class="container">
+      <section class="stats">
+        <div class="card stat"><div class="stat-label">站点</div><div class="stat-value num" x-text="overview?.site_count ?? sites.length"></div></div>
+        <div class="card stat"><div class="stat-label">占用空间</div><div class="stat-value num" x-text="formatBytes(overview?.total_bytes || 0)"></div></div>
+        <div class="card stat"><div class="stat-label">存储后端</div><div class="stat-value" x-text="backendLabel(overview?.backend)"></div></div>
+        <div class="card stat"><div class="stat-label">存储位置</div><div class="stat-value small" :title="overview?.location || overview?.data_path" x-text="overview?.location || overview?.data_path || '—'"></div></div>
+      </section>
+
+      <details class="card storage-details" x-show="overview?.details?.length">
+        <summary>
+          <span>存储详情</span>
+          <span class="badge" x-text="backendLabel(overview?.backend)"></span>
+          <button class="btn btn-sm" type="button" @click.prevent="loadOverview()">刷新</button>
+        </summary>
+        <div class="card-body">
+          <dl class="kv">
+            <template x-for="d in (overview?.details || [])" :key="d.label">
+              <div><dt x-text="d.label"></dt><dd class="mono" x-text="d.value"></dd></div>
+            </template>
+          </dl>
+          <ul class="notes" x-show="overview?.notes?.length">
+            <template x-for="n in (overview?.notes || [])" :key="n"><li x-text="n"></li></template>
+          </ul>
+        </div>
+      </details>
+
+      <section class="card">
+        <div class="card-head">
+          <div><h2>发布新站点 / 新版本</h2><p>拖入文件或整个文件夹；指定已有 slug 即发布为该站点的新版本。</p></div>
+        </div>
+        <div class="card-body">
+          <div class="dropzone" :class="{drag: dragging}"
+               @click="$refs.filePick.click()"
+               @dragover.prevent="dragging = true"
+               @dragleave.prevent="dragging = false"
+               @drop.prevent="onDrop($event)">
+            <div class="icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m6 10 6-6 6 6"/><path d="M20 16v3a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-3"/></svg>
+            </div>
+            <strong>拖放文件或文件夹到此处</strong>
+            <span>文件夹会保留目录结构，需包含 <code>index.html</code></span>
+            <div class="btn-group" @click.stop>
+              <button class="btn btn-sm" type="button" @click="$refs.filePick.click()">选择文件</button>
+              <button class="btn btn-sm" type="button" @click="$refs.dirPick.click()">选择文件夹</button>
+            </div>
+            <input x-ref="filePick" type="file" multiple hidden @change="onFiles($event.target.files, false); $event.target.value=''">
+            <input x-ref="dirPick" type="file" webkitdirectory multiple hidden @change="onFiles($event.target.files, true); $event.target.value=''">
+          </div>
+          <div class="publish-row">
+            <div class="field">
+              <label for="slug">站点 slug（可选）</label>
+              <input id="slug" class="input" x-model.trim="publishSlug" placeholder="留空自动生成，例如 my-site">
+            </div>
+            <div class="sub" x-show="!uploading">支持 HTML / CSS / JS / 图片等静态资源</div>
+          </div>
+          <template x-if="uploading">
+            <div>
+              <div class="progress"><i :style="`width:${uploadPct}%`"></i></div>
+              <div class="progress-label"><span x-text="uploadLabel"></span><span class="num" x-text="uploadPct + '%'"></span></div>
+            </div>
+          </template>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head" style="padding-bottom:14px">
+          <div><h2>站点</h2><p x-text="sites.length ? `共 ${sites.length} 个站点` : '暂无站点'"></p></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>站点</th><th>状态</th><th class="hide-sm">文件</th><th class="hide-md">更新时间</th><th style="text-align:right">操作</th></tr>
+            </thead>
+            <tbody>
+              <template x-for="s in sites" :key="s.slug">
+                <tr>
+                  <td>
+                    <a class="slug" :href="siteUrl(s.slug)" target="_blank" rel="noopener" x-text="s.slug"></a>
+                    <div class="sub mono" x-text="'当前版本 ' + short(s.current_version)"></div>
+                  </td>
+                  <td>
+                    <div class="badges">
+                      <template x-if="isExpired(s)"><span class="badge badge-danger">已过期</span></template>
+                      <template x-if="!isExpired(s)"><span class="badge badge-ok">● 在线</span></template>
+                      <template x-if="s.has_password"><span class="badge badge-accent">🔒 加密</span></template>
+                      <template x-if="s.expires_at && !isExpired(s)"><span class="badge badge-warn" :title="formatTime(s.expires_at)" x-text="'到期 ' + formatDate(s.expires_at)"></span></template>
+                    </div>
+                  </td>
+                  <td class="hide-sm num"><span x-text="s.file_count || 0"></span> 个 · <span x-text="formatBytes(s.total_bytes || 0)"></span></td>
+                  <td class="hide-md sub" x-text="formatTime(s.updated_at)"></td>
+                  <td class="actions">
+                    <div class="btn-group">
+                      <a class="btn btn-sm hide-sm" :href="siteUrl(s.slug)" target="_blank" rel="noopener">打开</a>
+                      <button class="btn btn-sm btn-primary" type="button" @click="openSite(s.slug)">管理</button>
+                      <button class="btn btn-sm btn-danger" type="button" @click="deleteSite(s.slug)">删除</button>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+              <template x-if="!sites.length">
+                <tr><td colspan="5"><div class="empty"><div class="icon">📦</div>还没有站点，拖入文件开始发布吧</div></td></tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </template>
+
+  <!-- 站点详情抽屉 -->
+  <dialog class="drawer" x-ref="drawer" @click.self="closeDrawer()" @close="detail = null">
+    <template x-if="detail">
+      <div style="display:contents">
+        <div class="drawer-head">
+          <div class="drawer-title">
+            <div>
+              <h2 x-text="detail.meta.slug"></h2>
+              <div class="sub" style="margin-top:4px">
+                <a :href="siteUrl(detail.meta.slug)" target="_blank" rel="noopener" x-text="detail.urls?.path || siteUrl(detail.meta.slug)"></a>
+              </div>
+            </div>
+            <button class="btn btn-ghost btn-sm" type="button" @click="closeDrawer()" aria-label="关闭">✕</button>
+          </div>
+          <nav class="tabs">
+            <button class="tab" :class="{active: tab==='versions'}" @click="tab='versions'">版本历史 <span class="badge" x-text="versions.length"></span></button>
+            <button class="tab" :class="{active: tab==='access'}" @click="tab='access'">访问设置</button>
+          </nav>
+        </div>
+        <div class="drawer-body">
+          <template x-if="tab==='versions'">
+            <div style="display:grid;gap:12px">
+              <div class="callout">「预览」在新标签页打开历史版本，不会影响线上；「设为当前」会立即把线上站点切换到该版本。</div>
+              <template x-for="(v, i) in versions" :key="v.id">
+                <div class="version" :class="{current: v.current}">
+                  <div class="version-top">
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                      <code x-text="short(v.id)" :title="v.id"></code>
+                      <template x-if="v.current"><span class="badge badge-ok">当前线上</span></template>
+                      <template x-if="i===0 && !v.current"><span class="badge badge-accent">最新</span></template>
+                    </div>
+                    <div class="btn-group">
+                      <a class="btn btn-sm" :href="v.preview_url" target="_blank" rel="noopener">预览 ↗</a>
+                      <button class="btn btn-sm" type="button" @click="toggleFiles(v)" x-text="openFiles[v.id] ? '收起文件' : '文件'"></button>
+                      <template x-if="!v.current">
+                        <button class="btn btn-sm btn-primary" type="button" @click="rollback(v.id)">设为当前</button>
+                      </template>
+                    </div>
+                  </div>
+                  <div class="version-meta">
+                    <span x-text="formatTime(v.created_at)"></span>
+                    <span class="num"><span x-text="v.file_count"></span> 个文件</span>
+                    <span class="num" x-text="formatBytes(v.total_bytes || 0)"></span>
+                  </div>
+                  <template x-if="openFiles[v.id]">
+                    <div class="files">
+                      <template x-for="f in openFiles[v.id]" :key="f.path">
+                        <div class="file">
+                          <a :href="fileUrl(v, f.path)" target="_blank" rel="noopener" x-text="f.path" :title="f.path"></a>
+                          <span class="num" x-text="formatBytes(f.size)"></span>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+              <template x-if="!versions.length"><div class="empty">暂无版本</div></template>
+            </div>
+          </template>
+
+          <template x-if="tab==='access'">
+            <form class="form-grid" @submit.prevent="saveAccess">
+              <div class="field">
+                <label>访问密码</label>
+                <div class="badges" style="margin-bottom:4px">
+                  <span class="badge" :class="detail.meta.has_password ? 'badge-accent' : ''" x-text="detail.meta.has_password ? '🔒 已设置密码' : '未设置密码（公开访问）'"></span>
+                </div>
+                <input class="input" type="password" x-model="editPassword" placeholder="输入新密码；留空保持不变" autocomplete="new-password">
+                <label style="display:flex;gap:6px;align-items:center;font-weight:500" x-show="detail.meta.has_password">
+                  <input type="checkbox" x-model="clearPassword"> 移除密码，改为公开访问
+                </label>
+              </div>
+              <div class="field">
+                <label>到期时间</label>
+                <input class="input" type="datetime-local" x-model="editExpiry">
+                <span class="hint">到期后站点返回 410。留空表示永不过期。</span>
+              </div>
+              <div class="btn-group" style="justify-content:flex-start">
+                <button class="btn btn-primary" type="submit">保存设置</button>
+                <button class="btn" type="button" @click="editExpiry=''">清除到期</button>
+              </div>
+            </form>
+          </template>
+        </div>
+      </div>
+    </template>
+  </dialog>
+
+  <div class="toasts">
+    <template x-for="t in toasts" :key="t.id">
+      <div class="toast" :class="{err: !t.ok}"><span x-text="t.ok ? '✓' : '!'"></span><span x-text="t.msg"></span></div>
+    </template>
+  </div>
+</body>
+</html>
