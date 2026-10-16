@@ -10,6 +10,7 @@
 - **历史版本预览**：任意历史版本可通过 `/_preview/<slug>/<versionId>/` 独立预览，不影响线上版本
 - **存储**：本地磁盘（默认）、S3 兼容对象存储（AWS S3 / MinIO 等）、Cloudflare R2、GitHub 仓库；见「[存储后端](#存储后端)」
 - **管理**：`/_admin/` 内嵌 Alpine.js（无 CDN、无前端构建）
+- **登录**：GitHub / Google / Keycloak / Authentik 等 OAuth2 / OIDC 登录（PKCE、白名单），API 密钥登录，可选 Cloudflare Access；见「[登录与身份认证](#登录与身份认证oauth2--oidc)」
 
 ## 环境要求
 
@@ -58,7 +59,7 @@ export OPENNOW_API_KEY=your-secret-key
 | `opennow delete <slug>` | 删除站点 |
 | `opennow rollback <slug> <version-id>` | 回滚版本 |
 
-环境变量：`OPENNOW_API_KEY`（必需，CLI/后台）、`OPENNOW_SERVER`（CLI 默认 `http://127.0.0.1:8080`）。
+环境变量：`OPENNOW_API_KEY`（必需，CLI 以 `Authorization: Bearer` 发送）、`OPENNOW_SERVER`（CLI 默认 `http://127.0.0.1:8080`）。
 
 ## 路径模式与资源链接
 
@@ -80,7 +81,159 @@ export OPENNOW_API_KEY=your-secret-key
 | `OPENNOW_ADMIN_HOST` | — | 独立管理域名，如 `admin.xuzhuo.xyz` |
 | `OPENNOW_PATH_MODE` | `true` | 路径路由 |
 | `OPENNOW_SUBDOMAIN_MODE` | `true` | 子域名路由 |
-| `OPENNOW_SECRET` | 自动生成 | 站点解锁 Cookie 与预览令牌的 HMAC 签名密钥；未设置时首次启动生成并保存到 `<DATA_DIR>/secret.key`（0600）。多实例部署需设置为同一值 |
+| `OPENNOW_SESSION_TTL` | `168h` | 后台会话有效期 |
+| `OPENNOW_ADMIN_API_KEY_LOGIN` | `true` | 是否允许在后台用 API 密钥登录（CLI Bearer 不受影响） |
+| `OPENNOW_OAUTH_*` / `OPENNOW_CF_ACCESS_*` | — | OAuth2 / OIDC 与 Cloudflare Access，见「登录与身份认证」 |
+| `OPENNOW_SECRET` | 自动生成 | 站点解锁 Cookie、后台会话与预览令牌的 HMAC 签名密钥；未设置时首次启动生成并保存到 `<DATA_DIR>/secret.key`（0600）。多实例部署需设置为同一值 |
+
+## 登录与身份认证（OAuth2 / OIDC）
+
+管理后台支持三类凭据，可同时启用：
+
+| 方式 | 适用 | 说明 |
+|------|------|------|
+| **OAuth2 / OIDC 登录** | 浏览器 | 授权码流程 + PKCE（S256）+ `state`；OIDC 另校验 `nonce` 与 ID Token（JWKS 签名、`iss`、`aud`、`exp`）。支持多个提供方 |
+| **API 密钥登录** | 浏览器 | 登录卡片中输入 `OPENNOW_API_KEY`；可用 `OPENNOW_ADMIN_API_KEY_LOGIN=false` 关闭 |
+| **Bearer API 密钥** | CLI / 脚本 | `Authorization: Bearer $OPENNOW_API_KEY`，不受上一项影响，CLI 默认使用此方式 |
+| **Cloudflare Access**（可选） | 浏览器 | 校验 `Cf-Access-Jwt-Assertion`（团队 JWKS 签名、`aud`、`iss`、`exp`），与 `Cf-Access-Authenticated-User-Email` 比对 |
+
+登录成功后服务端签发 **HMAC 签名会话 Cookie**（`opennow_session`，复用 `OPENNOW_SECRET` / `<DATA_DIR>/secret.key`），`HttpOnly`、`SameSite=Lax`，`OPENNOW_PUBLIC_URL` 为 `https://` 时自动加 `Secure`；有效期 `OPENNOW_SESSION_TTL`（默认 `168h`）。退出：`POST /_auth/logout`（或 `POST /api/v1/auth/logout`）。
+
+### 回调地址
+
+在提供方登记的回调（Redirect URI）为：
+
+```
+<OPENNOW_PUBLIC_URL>/_auth/callback/<provider>
+```
+
+例如 `https://now.example.com/_auth/callback/github`。启用 OAuth 时 **必须** 设置 `OPENNOW_PUBLIC_URL`。会话 Cookie 写在回调所在域名上；若后台使用独立域名（`OPENNOW_ADMIN_HOST`），请设置 `OPENNOW_OAUTH_BASE_URL=https://admin.example.com`，回调与 Cookie 将使用该地址。
+
+### 提供方配置
+
+`OPENNOW_OAUTH_PROVIDERS` 为逗号分隔的提供方名称（小写字母、数字、`-`、`_`），每个提供方用 `OPENNOW_OAUTH_<NAME>_*` 配置（`<NAME>` 为大写、`-` 换成 `_`）：
+
+| 变量 | 说明 |
+|------|------|
+| `_TYPE` | `github` / `oidc` / `oauth2`（名称为 `github` 或 `oidc` 时可省略） |
+| `_CLIENT_ID` / `_CLIENT_SECRET` | 客户端凭据 |
+| `_ISSUER` | OIDC Issuer，自动读取 `<issuer>/.well-known/openid-configuration` |
+| `_AUTH_URL` / `_TOKEN_URL` / `_USERINFO_URL` | 通用 OAuth2 端点（`oauth2` 必填；`github`/`oidc` 可用于覆盖） |
+| `_API_URL` | GitHub API 地址（GitHub Enterprise：`https://ghe.example.com/api/v3`） |
+| `_SCOPES` | 空格或逗号分隔；默认 OIDC `openid profile email`，GitHub `read:user user:email`（配置组织白名单时追加 `read:org`） |
+| `_DISPLAY_NAME` | 按钮文字，显示为「使用 <DISPLAY_NAME> 登录」 |
+| `_USER_FIELD` / `_EMAIL_FIELD` / `_NAME_FIELD` / `_AVATAR_FIELD` | 声明映射，支持点号嵌套（如 `data.login`）。默认用户名依次取 `preferred_username`、`login`、`username`、`nickname`、`sub` |
+| `_TRUST_EMAIL` | 提供方不返回 `email_verified` 时，是否视邮箱为已验证（默认 `false`；Entra ID 等可设 `true`） |
+
+也可用 `OPENNOW_OAUTH_CONFIG=/path/auth.json` 提供 JSON 配置文件（字段为上表的 snake_case，如 `client_id`、`userinfo_url`），环境变量会追加列表/覆盖标量：
+
+```json
+{
+  "providers": [
+    {"name": "google", "type": "oidc", "client_id": "…", "client_secret": "…",
+     "issuer": "https://accounts.google.com", "display_name": "Google"}
+  ],
+  "allowed_emails": ["me@gmail.com"],
+  "session_ttl": "24h",
+  "api_key_login": false
+}
+```
+
+### 白名单（默认拒绝）
+
+| 变量 | 示例 | 说明 |
+|------|------|------|
+| `OPENNOW_OAUTH_ALLOWED_USERS` | `github:zx06,keycloak:alice` | `<提供方>:<用户名或 sub>`，不区分大小写，按提供方隔离 |
+| `OPENNOW_OAUTH_ALLOWED_EMAILS` | `me@example.com` | 仅匹配**已验证**邮箱 |
+| `OPENNOW_OAUTH_ALLOWED_DOMAINS` | `example.com` | 已验证邮箱的域名（精确匹配，不含子域） |
+| `OPENNOW_OAUTH_ALLOWED_GITHUB_ORGS` | `my-org` | GitHub 组织成员（`/user/memberships/orgs/<org>` 状态为 `active`） |
+| `OPENNOW_OAUTH_ALLOW_ANY` | `false` | 设为 `true` 时允许任意通过提供方认证的账号（慎用） |
+
+白名单全部为空且未设置 `ALLOW_ANY` 时，所有 OAuth 登录都会被拒绝（启动日志会提示）。白名单在每次请求时重新校验，移除用户后其会话立即失效。
+
+### 示例：GitHub
+
+在 GitHub → Settings → Developer settings → **OAuth Apps** 新建应用，Authorization callback URL 填 `https://now.example.com/_auth/callback/github`。
+
+```bash
+OPENNOW_PUBLIC_URL=https://now.example.com
+OPENNOW_OAUTH_PROVIDERS=github
+OPENNOW_OAUTH_GITHUB_CLIENT_ID=Iv1.xxxxxxxx
+OPENNOW_OAUTH_GITHUB_CLIENT_SECRET=xxxxxxxx
+OPENNOW_OAUTH_ALLOWED_USERS=github:zx06
+# 可选：组织成员均可登录（需组织允许该 OAuth App 访问）
+# OPENNOW_OAUTH_ALLOWED_GITHUB_ORGS=my-org
+```
+
+GitHub 不是 OIDC 提供方，opennow 使用 `/user` 与 `/user/emails`（仅取已验证的主邮箱）获取身份。
+
+### 示例：Google
+
+Google Cloud Console → API 和服务 → 凭据 → 创建 OAuth 客户端 ID（Web 应用），已获授权的重定向 URI 填 `https://now.example.com/_auth/callback/google`。
+
+```bash
+OPENNOW_OAUTH_PROVIDERS=google
+OPENNOW_OAUTH_GOOGLE_TYPE=oidc
+OPENNOW_OAUTH_GOOGLE_ISSUER=https://accounts.google.com
+OPENNOW_OAUTH_GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com
+OPENNOW_OAUTH_GOOGLE_CLIENT_SECRET=GOCSPX-xxxx
+OPENNOW_OAUTH_GOOGLE_DISPLAY_NAME=Google
+OPENNOW_OAUTH_ALLOWED_EMAILS=me@gmail.com
+# 或 Google Workspace 整个域：OPENNOW_OAUTH_ALLOWED_DOMAINS=example.com
+```
+
+### 示例：Keycloak / Authentik（OIDC）
+
+```bash
+OPENNOW_OAUTH_PROVIDERS=keycloak
+OPENNOW_OAUTH_KEYCLOAK_TYPE=oidc
+OPENNOW_OAUTH_KEYCLOAK_ISSUER=https://sso.example.com/realms/main
+OPENNOW_OAUTH_KEYCLOAK_CLIENT_ID=opennow
+OPENNOW_OAUTH_KEYCLOAK_CLIENT_SECRET=xxxx
+OPENNOW_OAUTH_KEYCLOAK_DISPLAY_NAME=公司 SSO
+OPENNOW_OAUTH_ALLOWED_USERS=keycloak:alice
+```
+
+- **Keycloak**：Clients → Create（OpenID Connect，Client authentication 开启），Valid redirect URIs 填 `https://now.example.com/_auth/callback/keycloak`；Issuer 为 `https://<host>/realms/<realm>`。
+- **Authentik**：Applications → Providers → 新建 OAuth2/OpenID Provider（Confidential），Redirect URIs 填回调地址；Issuer 为 `https://<host>/application/o/<应用 slug>/`（注意末尾斜杠需与 discovery 中的 `issuer` 完全一致）。名称可用 `authentik`，变量前缀即 `OPENNOW_OAUTH_AUTHENTIK_*`。
+
+多个提供方可并存：`OPENNOW_OAUTH_PROVIDERS=github,keycloak`，登录卡片会显示多个按钮。
+
+### 示例：通用 OAuth2（如 Gitea）
+
+```bash
+OPENNOW_OAUTH_PROVIDERS=gitea
+OPENNOW_OAUTH_GITEA_TYPE=oauth2
+OPENNOW_OAUTH_GITEA_AUTH_URL=https://git.example.com/login/oauth/authorize
+OPENNOW_OAUTH_GITEA_TOKEN_URL=https://git.example.com/login/oauth/access_token
+OPENNOW_OAUTH_GITEA_USERINFO_URL=https://git.example.com/api/v1/user
+OPENNOW_OAUTH_GITEA_CLIENT_ID=…
+OPENNOW_OAUTH_GITEA_CLIENT_SECRET=…
+OPENNOW_OAUTH_GITEA_USER_FIELD=login
+OPENNOW_OAUTH_ALLOWED_USERS=gitea:zx06
+```
+
+### 示例：Cloudflare Access
+
+在 Cloudflare Zero Trust 中为 opennow 管理域名（建议配合 `OPENNOW_ADMIN_HOST`）创建 Self-hosted 应用，在应用概览中复制 **Application Audience (AUD) Tag**：
+
+```bash
+OPENNOW_CF_ACCESS_TEAM_DOMAIN=myteam            # 或 myteam.cloudflareaccess.com
+OPENNOW_CF_ACCESS_AUD=4714c1358e65fe4b408ad6d432a5f878f08194bdb4752441fd56faefa9b2b6f2
+# 二选一：
+OPENNOW_OAUTH_ALLOWED_DOMAINS=example.com       # 仍按 opennow 白名单（邮箱/域名，用户为 cloudflare:<email>）
+# OPENNOW_CF_ACCESS_ALLOW_ANY=true              # 完全信任 Access 策略
+```
+
+经 Access 认证的请求会自动登录后台（每个请求都校验 JWT，密钥按需从 `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` 获取并缓存）。仅有邮箱请求头而无有效 JWT 的请求会被忽略，因此绕过 Cloudflare 直连源站也无法伪造身份。
+
+### CSRF 与重定向
+
+- 依赖 Cookie / Cloudflare Access 的写操作（POST/PUT/PATCH/DELETE）必须携带请求头 `X-OpenNow-CSRF`（管理后台自动添加），且浏览器发送的 `Origin` / `Sec-Fetch-Site` 必须为同源；否则返回 403。Bearer 请求不受影响
+- 登录后的跳转地址（`/_auth/login/<provider>?redirect=`）只接受站内相对路径，拒绝 `//host`、`/\host`、绝对 URL 与控制字符
+- `state`、`nonce`、PKCE `code_verifier` 存放在 10 分钟有效、仅作用于 `/_auth/` 的签名 Cookie 中，回调时一次性使用
+
+> **兼容性提示**：旧版 CLI 通过 `POST /api/v1/auth/login` 换取 Cookie 后执行写操作，会因缺少 CSRF 请求头被拒绝；请升级 CLI（新版使用 Bearer）。
 
 ## 存储后端
 
@@ -218,6 +371,8 @@ CI 中 MinIO 集成测试以服务容器运行；GitHub 端到端测试仅在仓
 - 解锁 Cookie 路径：路径模式为 `/<slug>/`，子域名模式为 `/`
 - 站点 API 响应不再返回 `password_hash`，改为 `has_password`
 - 密码页返回 HTTP 401
+- 后台会话为无状态 HMAC 签名 Cookie：更换 `OPENNOW_SECRET` 会使所有会话失效；API 密钥会话绑定当前密钥，更换 `OPENNOW_API_KEY` 即失效
+- 路径模式下用户站点与管理后台同源，站点内脚本可携带管理员 Cookie 访问同源 API；生产环境建议用 `OPENNOW_ADMIN_HOST` 将后台放在独立域名，或使用子域名模式发布站点
 
 ## Docker
 

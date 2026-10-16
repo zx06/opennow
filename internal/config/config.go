@@ -22,9 +22,21 @@ type Config struct {
 	SubdomainMode bool
 	// Secret signs unlock cookies and preview tokens (OPENNOW_SECRET).
 	Secret string
+	// Auth holds admin login settings (OAuth2 / OIDC, API key, Cloudflare Access).
+	Auth AuthConfig
 }
 
+// FromEnv reads the configuration from environment variables. Login settings
+// that fail validation are returned as an error by AuthFromEnv; use Load to
+// get them.
 func FromEnv() Config {
+	c, _ := Load()
+	return c
+}
+
+// Load reads the configuration from environment variables and validates the
+// login settings.
+func Load() (Config, error) {
 	c := Config{
 		Addr:          env("OPENNOW_ADDR", ":8080"),
 		DataDir:       env("OPENNOW_DATA_DIR", "./data"),
@@ -44,7 +56,9 @@ func FromEnv() Config {
 	if !strings.HasPrefix(c.AdminPrefix, "/") {
 		c.AdminPrefix = "/" + c.AdminPrefix
 	}
-	return c
+	auth, err := AuthFromEnv(os.Getenv)
+	c.Auth = auth
+	return c, err
 }
 
 func env(k, def string) string {

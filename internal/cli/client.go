@@ -16,7 +16,6 @@ type Client struct {
 	BaseURL string
 	APIKey  string
 	client  *http.Client
-	cookies []*http.Cookie
 }
 
 func NewClient(baseURL, apiKey string) *Client {
@@ -27,38 +26,15 @@ func NewClient(baseURL, apiKey string) *Client {
 	}
 }
 
-func (c *Client) login() error {
-	body, _ := json.Marshal(map[string]string{"api_key": c.APIKey})
-	req, err := http.NewRequest(http.MethodPost, c.BaseURL+"/api/v1/auth/login", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("login failed: %s", strings.TrimSpace(string(b)))
-	}
-	c.cookies = resp.Cookies()
-	return nil
-}
-
+// do sends req authenticated with the API key as a bearer token (no
+// session cookie, so no CSRF header is needed).
 func (c *Client) do(req *http.Request) (*http.Response, error) {
-	for _, ck := range c.cookies {
-		req.AddCookie(ck)
-	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	return c.client.Do(req)
 }
 
 // Publish uploads a file or directory tree.
 func (c *Client) Publish(slug, source string) (map[string]any, error) {
-	if err := c.login(); err != nil {
-		return nil, err
-	}
 	createBody, _ := json.Marshal(map[string]string{"slug": slug})
 	req, _ := http.NewRequest(http.MethodPost, c.BaseURL+"/api/v1/publish", bytes.NewReader(createBody))
 	req.Header.Set("Content-Type", "application/json")
@@ -135,9 +111,6 @@ func (c *Client) uploadFile(revisionID, relPath, filePath string) error {
 }
 
 func (c *Client) ListSites() ([]map[string]any, error) {
-	if err := c.login(); err != nil {
-		return nil, err
-	}
 	req, _ := http.NewRequest(http.MethodGet, c.BaseURL+"/api/v1/sites", nil)
 	resp, err := c.do(req)
 	if err != nil {
@@ -154,9 +127,6 @@ func (c *Client) ListSites() ([]map[string]any, error) {
 }
 
 func (c *Client) DeleteSite(slug string) error {
-	if err := c.login(); err != nil {
-		return err
-	}
 	req, _ := http.NewRequest(http.MethodDelete, c.BaseURL+"/api/v1/sites/"+slug, nil)
 	resp, err := c.do(req)
 	if err != nil {
@@ -171,9 +141,6 @@ func (c *Client) DeleteSite(slug string) error {
 }
 
 func (c *Client) Rollback(slug, versionID string) error {
-	if err := c.login(); err != nil {
-		return err
-	}
 	body, _ := json.Marshal(map[string]string{"version_id": versionID})
 	req, _ := http.NewRequest(http.MethodPost, c.BaseURL+"/api/v1/sites/"+slug+"/rollback", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
