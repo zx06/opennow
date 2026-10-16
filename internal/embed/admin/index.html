@@ -7,8 +7,8 @@
   <title>opennow 管理后台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%229%22 fill=%22%236366f1%22/%3E%3Ctext x=%2216%22 y=%2222%22 font-size=%2218%22 text-anchor=%22middle%22 fill=%22white%22 font-family=%22sans-serif%22 font-weight=%22800%22%3Eo%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="admin.css">
-  <script defer src="app.js" data-cfasync="false"></script>
-  <script defer src="alpine.min.js" data-cfasync="false"></script>
+  <script defer src="app.js"></script>
+  <script defer src="alpine.min.js"></script>
 </head>
 <body x-data="adminApp()" x-init="init()">
   <header class="topbar">
@@ -22,9 +22,11 @@
             <input class="input" type="search" x-model="query" placeholder="搜索站点…" @input.debounce.250ms="loadSites">
           </div>
           <button class="btn btn-ghost" type="button" @click="refresh" title="刷新">刷新</button>
-          <div class="user-chip" x-show="userLabel" :title="userTitle">
-            <span class="avatar avatar-fallback" x-text="userInitial"></span>
-            <span class="user-name hide-sm" x-text="userLabel"></span>
+          <div class="user-chip" x-show="user" :title="userTitle()">
+            <template x-if="user?.avatar"><img class="avatar" :src="user.avatar" alt="" referrerpolicy="no-referrer"></template>
+            <template x-if="!user?.avatar"><span class="avatar avatar-fallback" x-text="initial()"></span></template>
+            <span class="user-name hide-sm" x-text="displayName()"></span>
+            <span class="badge hide-md" x-text="methodLabel()"></span>
           </div>
           <button class="btn" type="button" @click="logout">退出</button>
         </div>
@@ -37,25 +39,33 @@
     <div class="login-wrap">
       <div class="card login">
         <h1>欢迎回来</h1>
-        <p x-text="githubEnabled ? '使用 GitHub 账号登录管理后台（仅允许名单内用户）。' : '输入服务端配置的 OPENNOW_API_KEY 登录管理后台。'"></p>
+        <p x-text="providers.length ? '请选择登录方式进入 opennow 管理后台。' : '输入服务端配置的 OPENNOW_API_KEY 登录管理后台。'"></p>
         <div class="callout callout-danger" x-show="loginError" x-text="loginError" role="alert"></div>
-        <div class="oauth-list" x-show="githubEnabled">
-          <a class="btn btn-oauth" :href="githubLoginURL" @click="busy = true">
-            <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-            <span>使用 GitHub 登录</span>
-          </a>
+        <div class="oauth-list" x-show="providers.length">
+          <template x-for="p in providers" :key="p.name">
+            <button class="btn btn-oauth" type="button" @click="loginWith(p)" :disabled="busy">
+              <template x-if="p.type === 'github'">
+                <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+              </template>
+              <template x-if="p.type !== 'github'">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/><path d="m9 12 2 2 4-4"/></svg>
+              </template>
+              <span x-text="'使用 ' + p.display_name + ' 登录'"></span>
+            </button>
+          </template>
         </div>
-        <div class="divider" x-show="githubEnabled && apiKeyLogin"><span>或使用 API 密钥</span></div>
+        <div class="divider" x-show="providers.length && apiKeyLogin"><span>或使用 API 密钥</span></div>
         <form @submit.prevent="login" x-show="apiKeyLogin">
           <div class="field">
             <label for="apikey">API 密钥</label>
-            <input id="apikey" class="input" type="password" x-model="apiKey" placeholder="••••••••" :required="apiKeyLogin" :autofocus="!githubEnabled" autocomplete="current-password">
+            <input id="apikey" class="input" type="password" x-model="apiKey" placeholder="••••••••" :required="apiKeyLogin" autocomplete="current-password">
           </div>
-          <button class="btn" :class="githubEnabled ? '' : 'btn-primary'" type="submit" :disabled="busy">
-            <span x-show="busy" class="spin"></span><span x-text="githubEnabled ? '使用密钥登录' : '登录'"></span>
+          <button class="btn" :class="providers.length ? '' : 'btn-primary'" type="submit" :disabled="busy">
+            <span x-show="busy" class="spin"></span>使用密钥登录
           </button>
         </form>
-        <p class="sub" x-show="!githubEnabled && !apiKeyLogin" style="margin:0">服务端未启用任何网页登录方式，请配置 GitHub OAuth 或 <code>OPENNOW_API_KEY</code>。</p>
+        <p class="sub" x-show="!providers.length && !apiKeyLogin" style="margin:0">服务端未启用任何网页登录方式，请配置 <code>OPENNOW_OAUTH_PROVIDERS</code> 或开启 API 密钥登录。</p>
+        <p class="sub login-foot" x-show="cfAccess">已启用 Cloudflare Access：经 Access 认证的访问会自动登录。</p>
       </div>
     </div>
   </template>
@@ -162,16 +172,7 @@
                 </tr>
               </template>
               <template x-if="!sites.length">
-                <tr><td colspan="5">
-                  <div class="empty onboarding">
-                    <div class="icon">📦</div>
-                    <strong>还没有站点</strong>
-                    <p>把含 <code>index.html</code> 的文件夹拖到上方发布区，或用 CLI：</p>
-                    <pre class="code-hint">export OPENNOW_API_KEY=…
-./opennow publish --slug my-site ./mysite</pre>
-                    <p class="sub">本地单二进制：<code>CGO_ENABLED=0 go build -o opennow ./cmd/opennow && ./opennow serve</code></p>
-                  </div>
-                </td></tr>
+                <tr><td colspan="5"><div class="empty"><div class="icon">📦</div>还没有站点，拖入文件开始发布吧</div></td></tr>
               </template>
             </tbody>
           </table>
@@ -242,11 +243,6 @@
 
           <template x-if="tab==='access'">
             <form class="form-grid" @submit.prevent="saveAccess">
-              <div class="field">
-                <label for="edit-slug">站点 slug</label>
-                <input id="edit-slug" class="input" x-model.trim="editSlug" placeholder="新的 slug" autocomplete="off" spellcheck="false">
-                <span class="hint">保存后旧链接立即失效（不会双活或自动跳转）。勿含 / 或 ..。</span>
-              </div>
               <div class="field">
                 <label>访问密码</label>
                 <div class="badges" style="margin-bottom:4px">

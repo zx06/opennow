@@ -9,7 +9,10 @@ import (
 )
 
 func TestHealthz(t *testing.T) {
-	s := New(config.Config{AdminPrefix: "/_admin/"}, nil, http.NotFoundHandler())
+	s, err := New(config.Config{AdminPrefix: "/_admin/", Secret: "test-secret-0123456789abcdef0123456789"}, nil, http.NotFoundHandler())
+	if err != nil {
+		t.Fatal(err)
+	}
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	s.Handler().ServeHTTP(rr, req)

@@ -47,7 +47,10 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	cfg := config.Config{APIKey: "k", PathMode: true, AdminPrefix: "/_admin/", Secret: "test-secret-0123456789abcdef0123456789"}
-	srv := New(cfg, b, http.NotFoundHandler())
+	srv, err := New(cfg, b, http.NotFoundHandler())
+	if err != nil {
+		t.Fatal(err)
+	}
 	f := &fixture{t: t, h: srv.Handler(), store: b}
 	// v2 is published first, then v1 so that v1 is current (mirrors the box demo).
 	f.v2 = publish(t, b, "hello", "<h1>v2</h1>")
@@ -70,6 +73,7 @@ func (f *fixture) do(method, target, body string, cookies ...*http.Cookie) *http
 		r = strings.NewReader(body)
 	}
 	req := httptest.NewRequest(method, "http://127.0.0.1"+target, r)
+	req.Header.Set("X-OpenNow-CSRF", "1")
 	if strings.HasPrefix(body, "{") {
 		req.Header.Set("Content-Type", "application/json")
 	} else if body != "" {

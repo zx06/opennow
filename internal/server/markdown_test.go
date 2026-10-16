@@ -43,7 +43,11 @@ func mdServer(t *testing.T) (*Server, *local.Backend) {
 		AdminPrefix: "/_admin/",
 		Secret:      "test-secret-0123456789abcdef0123456789",
 	}
-	return New(cfg, b, http.NotFoundHandler()), b
+	srv, err := New(cfg, b, http.NotFoundHandler())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, b
 }
 
 func TestServeMarkdownFile(t *testing.T) {

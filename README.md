@@ -1,54 +1,53 @@
 # opennow
 
-自托管的 [here.now](https://here.now) 风格静态站点发布器：**单个 Go 二进制**（`CGO_ENABLED=0`），内嵌中文管理后台与 CLI。
+自托管的 [here.now](https://here.now) 风格静态站点发布器：单个 Go 二进制（`CGO_ENABLED=0`），支持 CLI 与内嵌中文管理后台。
 
-## 黄金路径（推荐）
+## 功能（MVP）
 
-只要有 **Go toolchain + 本仓库**，即可构建并跑起来（默认本地磁盘存储）。**不需要** Docker、Cloudflare Tunnel、QNAP 或自定义代理栈。
+- **发布流程**：创建修订 → 上传文件 → _finalize_ 上线
+- **路由**：子域名 `{slug}.<BASE_DOMAIN>` 与路径 `/<slug>/` 可同时启用
+- **访问控制**：站点密码（HMAC 签名 Cookie，按站点路径 scoped）、到期时间、版本回滚、删除
+- **历史版本预览**：任意历史版本可通过 `/_preview/<slug>/<versionId>/` 独立预览，不影响线上版本
+- **存储**：本地磁盘（默认）、S3 兼容对象存储（AWS S3 / MinIO 等）、Cloudflare R2、GitHub 仓库；见「[存储后端](#存储后端)」
+- **管理**：`/_admin/` 内嵌 Alpine.js（无 CDN、无前端构建）
+- **登录**：GitHub / Google / Keycloak / Authentik 等 OAuth2 / OIDC 登录（PKCE、白名单），API 密钥登录，可选 Cloudflare Access；见「[登录与身份认证](#登录与身份认证oauth2--oidc)」
 
+## 环境要求
+
+- **Go 1.26 或更高版本**（`go.mod` 声明 `go 1.26.0`；CI 与 Dockerfile 均使用 1.26）
+- 无需 CGO，无需 Node/前端构建工具
+
+## 快速开始（本地存储）
 
 ```bash
-# 1) 构建
+# 构建
 CGO_ENABLED=0 go build -o opennow ./cmd/opennow
 
-# 2) 启动（本地磁盘）
-export OPENNOW_API_KEY=dev-key
+# 启动（需设置管理密钥）
+export OPENNOW_API_KEY=your-secret-key
 export OPENNOW_DATA_DIR=./data
-export OPENNOW_PUBLIC_URL=http://127.0.0.1:8080
+export OPENNOW_PUBLIC_URL=http://127.0.0.1:8080   # 可选，用于 CLI/后台展示路径 URL
+# export OPENNOW_BASE_DOMAIN=xuzhuo.xyz         # 子域名模式需通配 DNS
+
 ./opennow serve
-# 或: ./scripts/serve-local.sh
-
-# 3) 探活
-curl -sf http://127.0.0.1:8080/healthz   # => ok
-
-# 4) 发布
-mkdir -p mysite && echo '<!doctype html><h1>hi</h1>' > mysite/index.html
-./opennow publish --slug mysite ./mysite
-# 或: ./scripts/publish-local.sh mysite ./mysite
 ```
 
-- 站点：`http://127.0.0.1:8080/mysite/`
-- 管理后台：`http://127.0.0.1:8080/_admin/`（先用 `OPENNOW_API_KEY` 登录；可选再配 GitHub OAuth，见附录）
+准备站点目录（**请使用相对资源路径**；见下文「路径模式与资源链接」）：
 
-> 出网（GitHub OAuth / 远程存储）时，请使用标准环境变量 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`。opennow 不引入额外代理库。
+```bash
+mkdir -p mysite
+echo '<!doctype html><html><body>Hello</body></html>' > mysite/index.html
+```
 
-## 功能
+发布：
 
-- **发布**：创建修订 → 上传 → finalize 上线；CLI 与 `/_admin/` 后台
-- **路由**：路径 `/<slug>/` 与可选子域名 `{slug}.<BASE_DOMAIN>`
-- **访问控制**：站点密码、到期、版本回滚 / 预览 / 删除、改 slug（旧链接立即失效）
-- **单 HTML 站点**：根目录仅有一个 `*.html`/`*.htm` 且无 `index.html` 时，访问 `/` 会回退到该文件；finalize 时会复制为 `index.html`（保留原文件）
-- **Markdown**：访问 `.md` / `.markdown` 时服务端渲染为 HTML；目录首页缺 `index.html` 时依次尝试 `index.md`、`index.markdown`、`README.md`、`README.markdown`
-- **存储**：`local`（默认）/ S3 / R2 / GitHub 仓库（见下文）
-- **探活**：`GET /healthz` → `ok`
+```bash
+export OPENNOW_API_KEY=your-secret-key
+./opennow publish --slug mysite ./mysite
+```
 
-## 大文件上传（分块）
-
-管理后台与 CLI 默认按 **256 KiB** 分块 `PUT`（`X-OpenNow-Offset` / `X-OpenNow-Total`），避免经 Cloudflare Tunnel 等代理时整文件超过 ~100s 超时。进度条按已发送字节更新。
-
-- 小文件仍可一次 PUT（不带分块头）。
-- `POST /api/v1/publish` 响应含 `chunk_size`，客户端可按此值切分。
-- 拼装暂存在 `<DATA_DIR>/upload-parts/`，finalize 后清理。
+浏览器访问：`http://127.0.0.1:8080/mysite/`  
+管理后台：`http://127.0.0.1:8080/_admin/`
 
 ## CLI
 
@@ -56,36 +55,187 @@ mkdir -p mysite && echo '<!doctype html><h1>hi</h1>' > mysite/index.html
 |------|------|
 | `opennow serve` | 启动 HTTP 服务 |
 | `opennow publish [--slug SLUG] [--server URL] <path>` | 发布文件或目录 |
-| `opennow list / delete / rename / rollback` | 站点管理 |
+| `opennow list [--server URL]` | 列出站点 |
+| `opennow delete <slug>` | 删除站点 |
+| `opennow rollback <slug> <version-id>` | 回滚版本 |
 
-CLI 环境变量：`OPENNOW_API_KEY`（必需）、`OPENNOW_SERVER`（默认 `http://127.0.0.1:8080`）。
+环境变量：`OPENNOW_API_KEY`（必需，CLI 以 `Authorization: Bearer` 发送）、`OPENNOW_SERVER`（CLI 默认 `http://127.0.0.1:8080`）。
 
-## Markdown 渲染
+## 路径模式与资源链接
 
-发布 `.md` / `.markdown` 文件后，通过站点 URL 访问时返回 **`text/html`** 页面（含基础排版样式），而不是原始 Markdown 文本。
+在路径模式 `https://host/<slug>/` 下，HTML 中的 **根绝对路径**（如 `href="/style.css"`）会被浏览器请求为 `https://host/style.css`。opennow 会根据 **Referer** 尝试解析到对应站点的 `style.css`。
 
-- 目录首页优先级：`index.html` → `index.md` → `index.markdown` → `README.md` → `README.markdown` →（仅根目录）唯一非 index 的 `*.html`/`*.htm`
-- 安全：用户内容视为不可信；禁止 `javascript:` 链接与危险标签/属性（goldmark 不启用 raw HTML，外加 bluemonday UGC 消毒）
+**推荐**在站点内使用相对路径（`style.css`、`./assets/app.js`），可跨子域名/路径模式且更可靠。
 
-## 核心环境变量
-
+## 环境变量
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `OPENNOW_ADDR` | `:8080` | 监听地址 |
-| `OPENNOW_DATA_DIR` | `./data` | 本地数据目录 |
-| `OPENNOW_STORAGE` | `local` | `local` / `s3` / `r2` / `github` |
-| `OPENNOW_API_KEY` | — | 管理密钥（CLI；后台未配 GitHub 时也用） |
-| `OPENNOW_PUBLIC_URL` | — | 公开 URL 前缀（展示链接、OAuth 回调） |
-| `OPENNOW_BASE_DOMAIN` | — | 子域名后缀（可选） |
-| `OPENNOW_SECRET` | 自动生成 | Cookie / 预览令牌 HMAC 密钥 |
+| `OPENNOW_DATA_DIR` | `./data` | 本地存储目录 |
+| `OPENNOW_STORAGE` | `local` | 存储后端：`local` / `s3` / `r2` / `github`，各自配置见「存储后端」 |
+| `OPENNOW_API_KEY` | — | 管理 API 密钥 |
+| `OPENNOW_BASE_DOMAIN` | — | 子域名后缀，如 `xuzhuo.xyz` |
+| `OPENNOW_PUBLIC_URL` | — | 路径模式公开 URL 前缀 |
 | `OPENNOW_ADMIN_PREFIX` | `/_admin/` | 管理 UI 路径 |
+| `OPENNOW_ADMIN_HOST` | — | 独立管理域名，如 `admin.xuzhuo.xyz` |
+| `OPENNOW_PATH_MODE` | `true` | 路径路由 |
+| `OPENNOW_SUBDOMAIN_MODE` | `true` | 子域名路由 |
+| `OPENNOW_SESSION_TTL` | `168h` | 后台会话有效期 |
+| `OPENNOW_ADMIN_API_KEY_LOGIN` | `true` | 是否允许在后台用 API 密钥登录（CLI Bearer 不受影响） |
+| `OPENNOW_OAUTH_*` / `OPENNOW_CF_ACCESS_*` | — | OAuth2 / OIDC 与 Cloudflare Access，见「登录与身份认证」 |
+| `OPENNOW_SECRET` | 自动生成 | 站点解锁 Cookie、后台会话与预览令牌的 HMAC 签名密钥；未设置时首次启动生成并保存到 `<DATA_DIR>/secret.key`（0600）。多实例部署需设置为同一值 |
 
-完整示例见 [`.env.example`](.env.example)。GitHub OAuth、远程存储缓存、Docker Compose、Cloudflare 等见文末 **附录（可选）**。
+## 登录与身份认证（OAuth2 / OIDC）
 
-## 路径模式与资源链接
+管理后台支持三类凭据，可同时启用：
 
-路径模式 `https://host/<slug>/` 下，HTML 里的根绝对路径（如 `href="/style.css"`）会请求到 `https://host/style.css`。opennow 会按 **Referer** 尝试回源到对应站点。**推荐**站点内使用相对路径（`style.css`、`./assets/app.js`）。
+| 方式 | 适用 | 说明 |
+|------|------|------|
+| **OAuth2 / OIDC 登录** | 浏览器 | 授权码流程 + PKCE（S256）+ `state`；OIDC 另校验 `nonce` 与 ID Token（JWKS 签名、`iss`、`aud`、`exp`）。支持多个提供方 |
+| **API 密钥登录** | 浏览器 | 登录卡片中输入 `OPENNOW_API_KEY`；可用 `OPENNOW_ADMIN_API_KEY_LOGIN=false` 关闭 |
+| **Bearer API 密钥** | CLI / 脚本 | `Authorization: Bearer $OPENNOW_API_KEY`，不受上一项影响，CLI 默认使用此方式 |
+| **Cloudflare Access**（可选） | 浏览器 | 校验 `Cf-Access-Jwt-Assertion`（团队 JWKS 签名、`aud`、`iss`、`exp`），与 `Cf-Access-Authenticated-User-Email` 比对 |
+
+登录成功后服务端签发 **HMAC 签名会话 Cookie**（`opennow_session`，复用 `OPENNOW_SECRET` / `<DATA_DIR>/secret.key`），`HttpOnly`、`SameSite=Lax`，`OPENNOW_PUBLIC_URL` 为 `https://` 时自动加 `Secure`；有效期 `OPENNOW_SESSION_TTL`（默认 `168h`）。退出：`POST /_auth/logout`（或 `POST /api/v1/auth/logout`）。
+
+### 回调地址
+
+在提供方登记的回调（Redirect URI）为：
+
+```
+<OPENNOW_PUBLIC_URL>/_auth/callback/<provider>
+```
+
+例如 `https://now.example.com/_auth/callback/google`（通用）；名为 `github` 的提供方为兼容既有 OAuth App，回调固定为 `https://now.example.com/api/v1/auth/github/callback`。启用 OAuth 时 **必须** 设置 `OPENNOW_PUBLIC_URL`。会话 Cookie 写在回调所在域名上；若后台使用独立域名（`OPENNOW_ADMIN_HOST`），请设置 `OPENNOW_OAUTH_BASE_URL=https://admin.example.com`，回调与 Cookie 将使用该地址。
+
+### 提供方配置
+
+`OPENNOW_OAUTH_PROVIDERS` 为逗号分隔的提供方名称（小写字母、数字、`-`、`_`），每个提供方用 `OPENNOW_OAUTH_<NAME>_*` 配置（`<NAME>` 为大写、`-` 换成 `_`）：
+
+| 变量 | 说明 |
+|------|------|
+| `_TYPE` | `github` / `oidc` / `oauth2`（名称为 `github` 或 `oidc` 时可省略） |
+| `_CLIENT_ID` / `_CLIENT_SECRET` | 客户端凭据 |
+| `_ISSUER` | OIDC Issuer，自动读取 `<issuer>/.well-known/openid-configuration` |
+| `_AUTH_URL` / `_TOKEN_URL` / `_USERINFO_URL` | 通用 OAuth2 端点（`oauth2` 必填；`github`/`oidc` 可用于覆盖） |
+| `_API_URL` | GitHub API 地址（GitHub Enterprise：`https://ghe.example.com/api/v3`） |
+| `_SCOPES` | 空格或逗号分隔；默认 OIDC `openid profile email`，GitHub `read:user user:email`（配置组织白名单时追加 `read:org`） |
+| `_DISPLAY_NAME` | 按钮文字，显示为「使用 <DISPLAY_NAME> 登录」 |
+| `_USER_FIELD` / `_EMAIL_FIELD` / `_NAME_FIELD` / `_AVATAR_FIELD` | 声明映射，支持点号嵌套（如 `data.login`）。默认用户名依次取 `preferred_username`、`login`、`username`、`nickname`、`sub` |
+| `_TRUST_EMAIL` | 提供方不返回 `email_verified` 时，是否视邮箱为已验证（默认 `false`；Entra ID 等可设 `true`） |
+
+也可用 `OPENNOW_OAUTH_CONFIG=/path/auth.json` 提供 JSON 配置文件（字段为上表的 snake_case，如 `client_id`、`userinfo_url`），环境变量会追加列表/覆盖标量：
+
+```json
+{
+  "providers": [
+    {"name": "google", "type": "oidc", "client_id": "…", "client_secret": "…",
+     "issuer": "https://accounts.google.com", "display_name": "Google"}
+  ],
+  "allowed_emails": ["me@gmail.com"],
+  "session_ttl": "24h",
+  "api_key_login": false
+}
+```
+
+### 白名单（默认拒绝）
+
+| 变量 | 示例 | 说明 |
+|------|------|------|
+| `OPENNOW_OAUTH_ALLOWED_USERS` | `github:zx06,keycloak:alice` | `<提供方>:<用户名或 sub>`，不区分大小写，按提供方隔离 |
+| `OPENNOW_OAUTH_ALLOWED_EMAILS` | `me@example.com` | 仅匹配**已验证**邮箱 |
+| `OPENNOW_OAUTH_ALLOWED_DOMAINS` | `example.com` | 已验证邮箱的域名（精确匹配，不含子域） |
+| `OPENNOW_OAUTH_ALLOWED_GITHUB_ORGS` | `my-org` | GitHub 组织成员（`/user/memberships/orgs/<org>` 状态为 `active`） |
+| `OPENNOW_OAUTH_ALLOW_ANY` | `false` | 设为 `true` 时允许任意通过提供方认证的账号（慎用） |
+
+白名单全部为空且未设置 `ALLOW_ANY` 时，所有 OAuth 登录都会被拒绝（启动日志会提示）。白名单在每次请求时重新校验，移除用户后其会话立即失效。
+
+### 示例：GitHub
+
+在 GitHub → Settings → Developer settings → **OAuth Apps** 新建应用，Authorization callback URL 填 `https://now.example.com/api/v1/auth/github/callback`（与历史 `OPENNOW_GITHUB_*` 部署一致；也可用 `OPENNOW_OAUTH_PROVIDERS=github` + `OPENNOW_OAUTH_GITHUB_*`）。
+
+**兼容**：仅配置 `OPENNOW_GITHUB_CLIENT_ID` / `OPENNOW_GITHUB_CLIENT_SECRET`（及可选 `OPENNOW_GITHUB_ALLOWLIST`，默认 `zx06`）时，会自动注册名为 `github` 的提供方，无需改 NAS `.env`。
+
+```bash
+OPENNOW_PUBLIC_URL=https://now.example.com
+OPENNOW_OAUTH_PROVIDERS=github
+OPENNOW_OAUTH_GITHUB_CLIENT_ID=Iv1.xxxxxxxx
+OPENNOW_OAUTH_GITHUB_CLIENT_SECRET=xxxxxxxx
+OPENNOW_OAUTH_ALLOWED_USERS=github:zx06
+# 可选：组织成员均可登录（需组织允许该 OAuth App 访问）
+# OPENNOW_OAUTH_ALLOWED_GITHUB_ORGS=my-org
+```
+
+GitHub 不是 OIDC 提供方，opennow 使用 `/user` 与 `/user/emails`（仅取已验证的主邮箱）获取身份。
+
+### 示例：Google
+
+Google Cloud Console → API 和服务 → 凭据 → 创建 OAuth 客户端 ID（Web 应用），已获授权的重定向 URI 填 `https://now.example.com/_auth/callback/google`。
+
+```bash
+OPENNOW_OAUTH_PROVIDERS=google
+OPENNOW_OAUTH_GOOGLE_TYPE=oidc
+OPENNOW_OAUTH_GOOGLE_ISSUER=https://accounts.google.com
+OPENNOW_OAUTH_GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com
+OPENNOW_OAUTH_GOOGLE_CLIENT_SECRET=GOCSPX-xxxx
+OPENNOW_OAUTH_GOOGLE_DISPLAY_NAME=Google
+OPENNOW_OAUTH_ALLOWED_EMAILS=me@gmail.com
+# 或 Google Workspace 整个域：OPENNOW_OAUTH_ALLOWED_DOMAINS=example.com
+```
+
+### 示例：Keycloak / Authentik（OIDC）
+
+```bash
+OPENNOW_OAUTH_PROVIDERS=keycloak
+OPENNOW_OAUTH_KEYCLOAK_TYPE=oidc
+OPENNOW_OAUTH_KEYCLOAK_ISSUER=https://sso.example.com/realms/main
+OPENNOW_OAUTH_KEYCLOAK_CLIENT_ID=opennow
+OPENNOW_OAUTH_KEYCLOAK_CLIENT_SECRET=xxxx
+OPENNOW_OAUTH_KEYCLOAK_DISPLAY_NAME=公司 SSO
+OPENNOW_OAUTH_ALLOWED_USERS=keycloak:alice
+```
+
+- **Keycloak**：Clients → Create（OpenID Connect，Client authentication 开启），Valid redirect URIs 填 `https://now.example.com/_auth/callback/keycloak`；Issuer 为 `https://<host>/realms/<realm>`。
+- **Authentik**：Applications → Providers → 新建 OAuth2/OpenID Provider（Confidential），Redirect URIs 填回调地址；Issuer 为 `https://<host>/application/o/<应用 slug>/`（注意末尾斜杠需与 discovery 中的 `issuer` 完全一致）。名称可用 `authentik`，变量前缀即 `OPENNOW_OAUTH_AUTHENTIK_*`。
+
+多个提供方可并存：`OPENNOW_OAUTH_PROVIDERS=github,keycloak`，登录卡片会显示多个按钮。
+
+### 示例：通用 OAuth2（如 Gitea）
+
+```bash
+OPENNOW_OAUTH_PROVIDERS=gitea
+OPENNOW_OAUTH_GITEA_TYPE=oauth2
+OPENNOW_OAUTH_GITEA_AUTH_URL=https://git.example.com/login/oauth/authorize
+OPENNOW_OAUTH_GITEA_TOKEN_URL=https://git.example.com/login/oauth/access_token
+OPENNOW_OAUTH_GITEA_USERINFO_URL=https://git.example.com/api/v1/user
+OPENNOW_OAUTH_GITEA_CLIENT_ID=…
+OPENNOW_OAUTH_GITEA_CLIENT_SECRET=…
+OPENNOW_OAUTH_GITEA_USER_FIELD=login
+OPENNOW_OAUTH_ALLOWED_USERS=gitea:zx06
+```
+
+### 示例：Cloudflare Access
+
+在 Cloudflare Zero Trust 中为 opennow 管理域名（建议配合 `OPENNOW_ADMIN_HOST`）创建 Self-hosted 应用，在应用概览中复制 **Application Audience (AUD) Tag**：
+
+```bash
+OPENNOW_CF_ACCESS_TEAM_DOMAIN=myteam            # 或 myteam.cloudflareaccess.com
+OPENNOW_CF_ACCESS_AUD=4714c1358e65fe4b408ad6d432a5f878f08194bdb4752441fd56faefa9b2b6f2
+# 二选一：
+OPENNOW_OAUTH_ALLOWED_DOMAINS=example.com       # 仍按 opennow 白名单（邮箱/域名，用户为 cloudflare:<email>）
+# OPENNOW_CF_ACCESS_ALLOW_ANY=true              # 完全信任 Access 策略
+```
+
+经 Access 认证的请求会自动登录后台（每个请求都校验 JWT，密钥按需从 `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` 获取并缓存）。仅有邮箱请求头而无有效 JWT 的请求会被忽略，因此绕过 Cloudflare 直连源站也无法伪造身份。
+
+### CSRF 与重定向
+
+- 依赖 Cookie / Cloudflare Access 的写操作（POST/PUT/PATCH/DELETE）必须携带请求头 `X-OpenNow-CSRF`（管理后台自动添加），且浏览器发送的 `Origin` / `Sec-Fetch-Site` 必须为同源；否则返回 403。Bearer 请求不受影响
+- 登录后的跳转地址（`/_auth/login/<provider>?redirect=`）只接受站内相对路径，拒绝 `//host`、`/\host`、绝对 URL 与控制字符
+- `state`、`nonce`、PKCE `code_verifier` 存放在 10 分钟有效、仅作用于 `/_auth/` 的签名 Cookie 中，回调时一次性使用
+
+> **兼容性提示**：旧版 CLI 通过 `POST /api/v1/auth/login` 换取 Cookie 后执行写操作，会因缺少 CSRF 请求头被拒绝；请升级 CLI（新版使用 Bearer）。
 
 ## 存储后端
 
@@ -221,74 +371,20 @@ CI 中 MinIO 集成测试以服务容器运行；GitHub 端到端测试仅在仓
 
 - 站点解锁 Cookie 值为 `过期时间.HMAC-SHA256(secret, slug, 密码哈希, 过期时间)`，服务端校验；修改或清除密码会使旧 Cookie 失效
 - 解锁 Cookie 路径：路径模式为 `/<slug>/`，子域名模式为 `/`
-- 改 slug：`PATCH /api/v1/sites/{slug}` 传 `{"slug":"new-slug"}`（或 CLI `opennow rename`）。校验非法字符与冲突（409）；目录/对象迁到新 slug 后旧 slug 删除，**旧链接不会 301**（避免双活）。
-
 - 站点 API 响应不再返回 `password_hash`，改为 `has_password`
 - 密码页返回 HTTP 401
+- 后台会话为无状态 HMAC 签名 Cookie：更换 `OPENNOW_SECRET` 会使所有会话失效；API 密钥会话绑定当前密钥，更换 `OPENNOW_API_KEY` 即失效
+- 路径模式下用户站点与管理后台同源，站点内脚本可携带管理员 Cookie 访问同源 API；生产环境建议用 `OPENNOW_ADMIN_HOST` 将后台放在独立域名，或使用子域名模式发布站点
 
-## 附录（可选）
-
-以下均为**可选叠加**，不是运行 opennow 的硬依赖。
-
-### A. 管理后台 GitHub OAuth
-
-配置后后台优先显示「使用 GitHub 登录」，仅允许名单内用户进入。CLI 仍用 `OPENNOW_API_KEY`。
-
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| `OPENNOW_GITHUB_CLIENT_ID` | — | OAuth App Client ID |
-| `OPENNOW_GITHUB_CLIENT_SECRET` | — | Client Secret |
-| `OPENNOW_GITHUB_ALLOWLIST` | `zx06` | 逗号分隔，大小写不敏感 |
-| `OPENNOW_GITHUB_DENY_MESSAGE` | — | 非名单用户的自定义提示（可选） |
-| `OPENNOW_ADMIN_API_KEY_LOGIN` | `true` | `false` 时隐藏网页 API Key 登录（CLI 不受影响） |
-
-回调 URL 固定为：`{OPENNOW_PUBLIC_URL}/api/v1/auth/github/callback`  
-路由：`GET /api/v1/auth/github/login|callback`、`GET /api/v1/auth/options`  
-OAuth 出站超时默认 45s，失败会写服务端日志；代理走 `HTTP(S)_PROXY`。
-
-### B. 国内/代理构建（GOPROXY）
-
-若 `go mod download` 较慢，可自行设置（非项目要求）：
+## Docker
 
 ```bash
-export GOPROXY=https://proxy.golang.org,direct
-# 或你常用的镜像
-```
-
-### C. Docker / GHCR（可选）
-
-单二进制仍是黄金路径。若要用镜像：
-
-```bash
-# 预构建镜像（GitHub Actions 推送到 GHCR；main → latest + sha-…，tag → v*）
-docker pull ghcr.io/zx06/opennow:latest
-docker run --rm -p 8080:8080   -e OPENNOW_API_KEY=dev-key   -e OPENNOW_PUBLIC_URL=http://127.0.0.1:8080   -v opennow-data:/data   ghcr.io/zx06/opennow:latest
-
-# 或本地构建（不依赖 GHCR；GOPROXY 勿写死，需要时自行 export）
 docker build -t opennow .
-docker run --rm -p 8080:8080 -e OPENNOW_API_KEY=dev-key -v opennow-data:/data opennow
+docker run --rm -p 8080:8080 \
+  -e OPENNOW_API_KEY=your-secret-key \
+  -v opennow-data:/data \
+  opennow
 ```
-
-- 镜像：`ghcr.io/zx06/opennow`（至少 `linux/amd64`）
-- 常用 tag：`latest`（main）、`sha-<短 SHA>`、`v*`（git tag）
-- 若 `docker pull` 401/403：到 GitHub → Packages → `opennow` → Package settings，将可见性设为 **Public**（首次推送后可能默认 private）
-- CI 还会上传各平台二进制 artifact；打 `v*` tag 时挂到 GitHub Release
-- 可选 Compose：[`docker-compose.example.yml`](docker-compose.example.yml)
-
-国内若 `go mod` / 基础镜像偏慢，可自行设置 `GOPROXY`、镜像加速，**不是**项目硬依赖。
-
-### D. Cloudflare 缓存清理
-
-仅在你把站点放在 CF CDN 后需要主动 purge 时使用：[`scripts/optional-cf-purge-example.sh`](scripts/optional-cf-purge-example.sh)。**不是** opennow 运行时依赖。
-
-### E. 本地脚本
-
-| 脚本 | 说明 |
-|------|------|
-| `scripts/serve-local.sh` | 构建（如需要）并 `serve` |
-| `scripts/publish-local.sh` | 向本地服务发布 |
-| `scripts/demo.sh` | 端到端冒烟（含 `/healthz`） |
-| `scripts/optional-cf-purge-example.sh` | 可选 CF purge |
 
 ## 许可
 
