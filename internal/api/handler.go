@@ -15,6 +15,7 @@ import (
 
 	"github.com/zx06/opennow/internal/auth"
 	"github.com/zx06/opennow/internal/config"
+	"github.com/zx06/opennow/internal/oauth"
 	"github.com/zx06/opennow/internal/site"
 	"github.com/zx06/opennow/internal/storage"
 	"github.com/zx06/opennow/internal/storage/storeerr"
@@ -22,10 +23,10 @@ import (
 
 // Handler serves the public admin JSON API.
 type Handler struct {
-	cfg      config.Config
-	store    storage.Backend
-	sessions *sessionStore
-	signer   *auth.Signer
+	cfg    config.Config
+	store  storage.Backend
+	authn  *oauth.Service
+	signer *auth.Signer
 }
 
 // PreviewTTL is how long a signed preview link stays valid.
@@ -34,17 +35,26 @@ const PreviewTTL = 24 * time.Hour
 // SiteCookieTTL is how long a site unlock cookie stays valid.
 const SiteCookieTTL = 7 * 24 * time.Hour
 
-func New(cfg config.Config, store storage.Backend, signer *auth.Signer) *Handler {
+// New builds the API handler. authn handles sessions, OAuth login and
+// Cloudflare Access; when nil it is built from cfg.
+func New(cfg config.Config, store storage.Backend, signer *auth.Signer, authn *oauth.Service) (*Handler, error) {
 	if signer == nil {
 		signer = auth.NewSigner(cfg.Secret)
 	}
-	return &Handler{cfg: cfg, store: store, sessions: newSessionStore(), signer: signer}
+	if authn == nil {
+		var err error
+		if authn, err = oauth.NewService(cfg, signer, nil); err != nil {
+			return nil, err
+		}
+	}
+	return &Handler{cfg: cfg, store: store, authn: authn, signer: signer}, nil
 }
 
-// IsAdmin reports whether the request carries a valid admin session.
+// IsAdmin reports whether the request carries valid admin credentials
+// (session cookie, Cloudflare Access identity or bearer API key).
 func (h *Handler) IsAdmin(r *http.Request) bool {
-	c, err := r.Cookie(sessionCookie)
-	return err == nil && h.sessions.valid(c.Value)
+	sess, _, _ := h.authn.Authenticate(r)
+	return sess != nil
 }
 
 // MetaView is the public JSON shape of site metadata (never exposes the password hash).
@@ -95,6 +105,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func (h *Handler) Mount(mux *http.ServeMux) {
+	h.authn.Mount(mux)
 	mux.HandleFunc("POST /api/v1/auth/login", h.login)
 	mux.HandleFunc("POST /api/v1/auth/logout", h.logout)
 	mux.HandleFunc("GET /api/v1/auth/me", h.me)
@@ -114,9 +125,15 @@ func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/publish/{revisionId}/finalize", h.finalizePublish)
 }
 
+// login exchanges the API key for a signed session cookie (web admin).
+// Disabled by OPENNOW_ADMIN_API_KEY_LOGIN=false; the CLI uses a bearer token.
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.APIKey == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "未配置 OPENNOW_API_KEY"})
+		return
+	}
+	if !h.authn.APIKeyLoginEnabled() {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "已禁用 API 密钥登录，请使用第三方账号登录"})
 		return
 	}
 	var body struct {
@@ -130,35 +147,34 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "密钥无效"})
 		return
 	}
-	sid, err := h.sessions.create()
-	if err != nil {
+	if err := h.authn.IssueSession(w, auth.Session{Method: "apikey", Name: "API 密钥"}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "会话创建失败"})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    sid,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   7 * 24 * 3600,
-	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(sessionCookie); err == nil {
-		h.sessions.delete(c.Value)
-	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
+	h.authn.ClearSession(w)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
-	if !h.requireAdmin(w, r) {
+	sess, ok := h.principal(w, r)
+	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"authenticated": true,
+		"method":        sess.Method,
+		"provider":      sess.Provider,
+		"username":      sess.Username,
+		"name":          sess.Name,
+		"email":         sess.Email,
+		"avatar":        sess.Avatar,
+		"csrf_header":   oauth.CSRFHeader,
+	})
 }
 
 func (h *Handler) storageOverview(w http.ResponseWriter, r *http.Request) {
@@ -508,23 +524,6 @@ func (h *Handler) siteURLs(slug string) map[string]string {
 		urls["subdomain"] = "https://" + slug + "." + h.cfg.BaseDomain + "/"
 	}
 	return urls
-}
-
-// AuthenticatedAPI performs login + request with session cookie (for CLI).
-func (h *Handler) AuthenticateAPIKey(apiKey string) (http.Header, error) {
-	if h.cfg.APIKey == "" {
-		return nil, errors.New("server has no API key configured")
-	}
-	if !constantTimeEqual(apiKey, h.cfg.APIKey) {
-		return nil, errors.New("invalid api key")
-	}
-	sid, err := h.sessions.create()
-	if err != nil {
-		return nil, err
-	}
-	hdr := http.Header{}
-	hdr.Add("Cookie", sessionCookie+"="+sid)
-	return hdr, nil
 }
 
 // ReadBody helper for tests.

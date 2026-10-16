@@ -1,64 +1,38 @@
 package api
 
 import (
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/hex"
+	"errors"
 	"net/http"
-	"sync"
-	"time"
+
+	"github.com/zx06/opennow/internal/auth"
+	"github.com/zx06/opennow/internal/oauth"
 )
 
-const sessionCookie = "opennow_session"
-
-type sessionStore struct {
-	mu       sync.Mutex
-	sessions map[string]time.Time
-}
-
-func newSessionStore() *sessionStore {
-	return &sessionStore{sessions: make(map[string]time.Time)}
-}
-
-func (s *sessionStore) create() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+// principal resolves the caller and enforces CSRF protection for
+// state-changing requests that use ambient (cookie / Cloudflare Access)
+// credentials. It writes the error response itself.
+func (h *Handler) principal(w http.ResponseWriter, r *http.Request) (*auth.Session, bool) {
+	sess, ambient, err := h.authn.Authenticate(r)
+	if errors.Is(err, oauth.ErrBadBearer) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="opennow"`)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "API 密钥无效"})
+		return nil, false
 	}
-	id := hex.EncodeToString(b)
-	s.mu.Lock()
-	s.sessions[id] = time.Now().Add(7 * 24 * time.Hour)
-	s.mu.Unlock()
-	return id, nil
-}
-
-func (s *sessionStore) valid(id string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	exp, ok := s.sessions[id]
-	if !ok {
-		return false
+	if sess == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "未登录"})
+		return nil, false
 	}
-	if time.Now().After(exp) {
-		delete(s.sessions, id)
-		return false
+	if ambient && !h.authn.CheckCSRF(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "CSRF 校验失败：缺少 " + oauth.CSRFHeader + " 请求头或来源不一致"})
+		return nil, false
 	}
-	return true
-}
-
-func (s *sessionStore) delete(id string) {
-	s.mu.Lock()
-	delete(s.sessions, id)
-	s.mu.Unlock()
+	return sess, true
 }
 
 func (h *Handler) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	c, err := r.Cookie(sessionCookie)
-	if err != nil || !h.sessions.valid(c.Value) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "未登录"})
-		return false
-	}
-	return true
+	_, ok := h.principal(w, r)
+	return ok
 }
 
 func constantTimeEqual(a, b string) bool {

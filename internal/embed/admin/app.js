@@ -1,33 +1,91 @@
 // opennow admin — Alpine.js component (vendored, no build step).
 function adminApp() {
-  const api = (p, opt) => fetch('/api/v1' + p, Object.assign({ credentials: 'same-origin' }, opt));
+  // Every request carries the CSRF header required for state-changing
+  // requests made with the session cookie.
+  const api = (p, opt = {}) => fetch('/api/v1' + p, Object.assign({ credentials: 'same-origin' }, opt, {
+    headers: Object.assign({ 'X-OpenNow-CSRF': '1' }, opt.headers || {}),
+  }));
+  const LOGIN_ERRORS = {
+    invalid_state: '登录状态已失效或被篡改，请重新登录',
+    exchange_failed: '向身份提供方验证登录失败，请重试或联系管理员',
+    not_allowed: '该账号不在允许登录的名单中',
+    denied_by_provider: '已在身份提供方取消授权',
+    provider_unavailable: '身份提供方暂时不可用，请稍后重试',
+  };
   const json = (body, method = 'POST') => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const encPath = (p) => p.split('/').map(encodeURIComponent).join('/');
 
   return {
     ready: false, authed: false, busy: false, apiKey: '', query: '',
+    user: null, providers: [], apiKeyLogin: true, cfAccess: false, loginError: '',
     sites: [], overview: null, toasts: [],
     dragging: false, publishSlug: '', uploading: false, uploadPct: 0, uploadLabel: '',
     detail: null, versions: [], openFiles: {}, tab: 'versions',
     editPassword: '', clearPassword: false, editExpiry: '',
 
     async init() {
-      try { const r = await api('/auth/me'); this.authed = r.ok; if (this.authed) await this.refresh(); } catch (e) {}
+      const params = new URLSearchParams(location.search);
+      const err = params.get('login_error');
+      if (err) {
+        this.loginError = LOGIN_ERRORS[err] || ('登录失败：' + err);
+        params.delete('login_error');
+        const qs = params.toString();
+        history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+      }
+      try {
+        const pr = await api('/auth/providers');
+        if (pr.ok) {
+          const j = await pr.json();
+          this.providers = j.providers || [];
+          this.apiKeyLogin = !!j.api_key_login;
+          this.cfAccess = !!j.cf_access;
+        }
+      } catch (e) {}
+      try { await this.loadMe(); if (this.authed) await this.refresh(); } catch (e) {}
       this.ready = true;
+    },
+    async loadMe() {
+      const r = await api('/auth/me');
+      this.authed = r.ok;
+      this.user = r.ok ? await r.json() : null;
+    },
+    loginWith(p) {
+      this.busy = true;
+      location.href = p.login_url + '?redirect=' + encodeURIComponent(location.pathname);
+    },
+    displayName() {
+      const u = this.user || {};
+      if (u.method === 'apikey' || u.method === 'bearer') return 'API 密钥';
+      return u.name || u.username || u.email || '已登录';
+    },
+    userTitle() {
+      const u = this.user || {};
+      return [u.username && (u.provider ? u.provider + ':' : '') + u.username, u.email].filter(Boolean).join(' · ');
+    },
+    initial() { return (this.displayName() || '?').trim().slice(0, 1).toUpperCase(); },
+    methodLabel() {
+      const u = this.user || {};
+      if (u.method === 'cf-access') return 'Cloudflare Access';
+      if (u.method === 'oauth') return (this.providers.find(p => p.name === u.provider)?.display_name) || u.provider;
+      return '密钥';
     },
     async login() {
       this.busy = true;
       try {
         const r = await api('/auth/login', json({ api_key: this.apiKey }));
         if (!r.ok) return this.toast(await errMsg(r), false);
-        this.authed = true; this.apiKey = '';
+        this.apiKey = ''; this.loginError = '';
+        await this.loadMe();
         this.toast('登录成功');
         await this.refresh();
       } finally { this.busy = false; }
     },
     async logout() {
+      const viaCF = this.user?.method === 'cf-access';
       await api('/auth/logout', { method: 'POST' });
-      this.authed = false; this.sites = []; this.overview = null;
+      this.authed = false; this.user = null; this.sites = []; this.overview = null;
+      // Cloudflare Access would sign the user straight back in; end that session too.
+      if (viaCF) location.href = '/cdn-cgi/access/logout';
     },
     async refresh() { await Promise.all([this.loadSites(), this.loadOverview()]); },
     backendLabel(b) {
