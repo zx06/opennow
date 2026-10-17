@@ -10,6 +10,7 @@
 - **历史版本预览**：任意历史版本可通过 `/_preview/<slug>/<versionId>/` 独立预览，不影响线上版本
 - **存储**：本地磁盘（默认）、S3 兼容对象存储（AWS S3 / MinIO 等）、Cloudflare R2、GitHub 仓库；见「[存储后端](#存储后端)」
 - **管理**：`/_admin/` 内嵌 Alpine.js（无 CDN、无前端构建）
+- **Markdown**：访问 `.md` / `.markdown` 时服务端渲染为 HTML；目录首页在缺少 `index.html` 时依次尝试 `index.md`、`index.markdown`、`README.md`、`README.markdown`。渲染使用 goldmark + bluemonday（UGC 策略）消毒，剥离脚本与危险链接
 
 ## 环境要求
 
@@ -59,6 +60,13 @@ export OPENNOW_API_KEY=your-secret-key
 | `opennow rollback <slug> <version-id>` | 回滚版本 |
 
 环境变量：`OPENNOW_API_KEY`（必需，CLI/后台）、`OPENNOW_SERVER`（CLI 默认 `http://127.0.0.1:8080`）。
+
+## Markdown 渲染
+
+发布 `.md` / `.markdown` 文件后，通过站点 URL 访问时返回 **`text/html`** 页面（含基础排版样式），而不是原始 Markdown 文本。
+
+- 目录首页优先级：`index.html` → `index.md` → `index.markdown` → `README.md` → `README.markdown`
+- 安全：用户内容视为不可信；禁止 `javascript:` 链接与危险标签/属性（goldmark 不启用 raw HTML，外加 bluemonday UGC 消毒）
 
 ## 路径模式与资源链接
 
