@@ -6,6 +6,7 @@
 
 只要有 **Go toolchain + 本仓库**，即可构建并跑起来（默认本地磁盘存储）。**不需要** Docker、Cloudflare Tunnel、QNAP 或自定义代理栈。
 
+
 ```bash
 # 1) 构建
 CGO_ENABLED=0 go build -o opennow ./cmd/opennow
@@ -37,6 +38,7 @@ mkdir -p mysite && echo '<!doctype html><h1>hi</h1>' > mysite/index.html
 - **路由**：路径 `/<slug>/` 与可选子域名 `{slug}.<BASE_DOMAIN>`
 - **访问控制**：站点密码、到期、版本回滚 / 预览 / 删除、改 slug（旧链接立即失效）
 - **单 HTML 站点**：根目录仅有一个 `*.html`/`*.htm` 且无 `index.html` 时，访问 `/` 会回退到该文件；finalize 时会复制为 `index.html`（保留原文件）
+- **Markdown**：访问 `.md` / `.markdown` 时服务端渲染为 HTML；目录首页缺 `index.html` 时依次尝试 `index.md`、`index.markdown`、`README.md`、`README.markdown`
 - **存储**：`local`（默认）/ S3 / R2 / GitHub 仓库（见下文）
 - **探活**：`GET /healthz` → `ok`
 
@@ -58,7 +60,15 @@ mkdir -p mysite && echo '<!doctype html><h1>hi</h1>' > mysite/index.html
 
 CLI 环境变量：`OPENNOW_API_KEY`（必需）、`OPENNOW_SERVER`（默认 `http://127.0.0.1:8080`）。
 
+## Markdown 渲染
+
+发布 `.md` / `.markdown` 文件后，通过站点 URL 访问时返回 **`text/html`** 页面（含基础排版样式），而不是原始 Markdown 文本。
+
+- 目录首页优先级：`index.html` → `index.md` → `index.markdown` → `README.md` → `README.markdown` →（仅根目录）唯一非 index 的 `*.html`/`*.htm`
+- 安全：用户内容视为不可信；禁止 `javascript:` 链接与危险标签/属性（goldmark 不启用 raw HTML，外加 bluemonday UGC 消毒）
+
 ## 核心环境变量
+
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
