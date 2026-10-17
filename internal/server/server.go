@@ -16,6 +16,7 @@ import (
 	"github.com/zx06/opennow/internal/api"
 	"github.com/zx06/opennow/internal/auth"
 	"github.com/zx06/opennow/internal/config"
+	"github.com/zx06/opennow/internal/markdown"
 	"github.com/zx06/opennow/internal/storage"
 	"github.com/zx06/opennow/internal/storage/storeerr"
 )
@@ -107,15 +108,11 @@ func (s *Server) serveRoot(w http.ResponseWriter, r *http.Request) {
 	s.serveVersionFile(w, r, slug, meta.CurrentVersion, rel)
 }
 
-// serveVersionFile streams rel from a version, falling back to rel/index.html.
+// serveVersionFile streams rel from a version, falling back to directory
+// index candidates (index.html, then Markdown indexes). Markdown files are
+// rendered to a sanitized HTML page.
 func (s *Server) serveVersionFile(w http.ResponseWriter, r *http.Request, slug, versionID, rel string) {
-	rc, info, err := s.store.OpenVersionFile(r.Context(), slug, versionID, rel)
-	if err != nil {
-		if errors.Is(err, storeerr.ErrNotFound) && !strings.HasSuffix(rel, "index.html") {
-			rel = path.Join(strings.TrimSuffix(rel, "/"), "index.html")
-			rc, info, err = s.store.OpenVersionFile(r.Context(), slug, versionID, rel)
-		}
-	}
+	rc, info, err := s.openVersionFile(r.Context(), slug, versionID, rel)
 	if err != nil {
 		if errors.Is(err, storeerr.ErrNotFound) {
 			http.NotFound(w, r)
@@ -125,6 +122,12 @@ func (s *Server) serveVersionFile(w http.ResponseWriter, r *http.Request, slug, 
 		return
 	}
 	defer rc.Close()
+	if markdown.IsMarkdown(info.Path) {
+		if err := writeMarkdown(w, info.Path, rc); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
 	w.Header().Set("Content-Type", ContentType(info.Path))
 	io.Copy(w, rc)
 }
@@ -287,6 +290,12 @@ func (s *Server) tryRefererAsset(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	defer rc.Close()
+	if markdown.IsMarkdown(info.Path) {
+		if err := writeMarkdown(w, info.Path, rc); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return true
+	}
 	w.Header().Set("Content-Type", ContentType(info.Path))
 	io.Copy(w, rc)
 	return true
