@@ -310,6 +310,9 @@ func (b *Backend) Finalize(ctx context.Context, revisionID string) (*site.Versio
 	if err != nil {
 		return nil, "", err
 	}
+	if err := b.ensureSoleHTMLIndex(ctx, d); err != nil {
+		return nil, "", err
+	}
 	man := &common.Manifest{VersionID: d.VersionID, Slug: d.Slug, CreatedAt: time.Now().UTC()}
 	d.mu.Lock()
 	tracked := d.files
@@ -671,9 +674,127 @@ func (b *Backend) Overview(ctx context.Context) (*site.StorageOverview, error) {
 	}, nil
 }
 
+func (b *Backend) ensureSoleHTMLIndex(ctx context.Context, d *draftState) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.files == nil {
+		root := b.lay.FilesRoot(d.Slug, d.VersionID)
+		objs, _, err := b.store.List(ctx, root, false)
+		if err != nil {
+			return err
+		}
+		d.files = make(map[string]int64, len(objs))
+		for _, o := range objs {
+			rel := strings.TrimPrefix(o.Key, root)
+			d.files[rel] = o.Size
+		}
+	}
+	src := common.SoleRootHTMLFromMap(d.files)
+	if src == "" {
+		return nil
+	}
+	rc, info, err := b.store.Get(ctx, b.lay.File(d.Slug, d.VersionID, src))
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return err
+	}
+	ct := info.ContentType
+	if ct == "" {
+		ct = mimetype.ForName("index.html")
+	}
+	if err := b.store.Put(ctx, b.lay.File(d.Slug, d.VersionID, "index.html"), bytes.NewReader(data), int64(len(data)), ct); err != nil {
+		return err
+	}
+	d.files["index.html"] = int64(len(data))
+	return nil
+}
+
+func (b *Backend) RenameSite(ctx context.Context, oldSlug, newSlug string) (*site.Meta, error) {
+	if !common.ValidID(oldSlug) || !common.ValidID(newSlug) {
+		return nil, storeerr.ErrInvalidPath
+	}
+	if oldSlug == newSlug {
+		return b.readMeta(ctx, oldSlug, true)
+	}
+	// Lock in sorted order to avoid deadlock.
+	first, second := oldSlug, newSlug
+	if first > second {
+		first, second = second, first
+	}
+	u1 := b.lockSlug(first)
+	defer u1()
+	u2 := b.lockSlug(second)
+	defer u2()
+
+	meta, err := b.readMeta(ctx, oldSlug, true)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := b.readMeta(ctx, newSlug, true); err == nil {
+		return nil, storeerr.ErrConflict
+	} else if !errors.Is(err, storeerr.ErrNotFound) {
+		return nil, err
+	}
+
+	oldRoot := b.lay.SiteRoot(oldSlug)
+	newRoot := b.lay.SiteRoot(newSlug)
+	objs, _, err := b.store.List(ctx, oldRoot, false)
+	if err != nil {
+		return nil, err
+	}
+	oldKeys := make([]string, 0, len(objs))
+	for _, o := range objs {
+		oldKeys = append(oldKeys, o.Key)
+		rel := strings.TrimPrefix(o.Key, oldRoot)
+		newKey := newRoot + rel
+		rc, info, err := b.store.Get(ctx, o.Key)
+		if err != nil {
+			return nil, err
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			return nil, err
+		}
+		ct := info.ContentType
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		if err := b.store.Put(ctx, newKey, bytes.NewReader(data), int64(len(data)), ct); err != nil {
+			return nil, err
+		}
+	}
+
+	meta.Slug = newSlug
+	meta.UpdatedAt = time.Now().UTC()
+	if err := b.writeMeta(ctx, meta); err != nil {
+		return nil, err
+	}
+
+	// Remove old objects (meta first so old slug disappears immediately).
+	_ = b.store.DeleteMany(ctx, []string{b.lay.Meta(oldSlug)})
+	b.meta.Set(oldSlug, metaEntry{missing: true})
+	for i := 0; i < len(oldKeys); i += 1000 {
+		j := min(i+1000, len(oldKeys))
+		_ = b.store.DeleteMany(ctx, oldKeys[i:j])
+	}
+	b.versions.Delete(oldSlug)
+	oldPfx := oldSlug + "/"
+	b.manifests.DeleteFunc(func(k string) bool { return strings.HasPrefix(k, oldPfx) })
+	b.files.DeleteFunc(func(k string) bool { return strings.HasPrefix(k, oldRoot) })
+	b.siteList.Purge()
+	return meta, nil
+}
+
+
 func orDash(s string) string {
 	if s == "" {
 		return "—"
 	}
 	return s
 }
+

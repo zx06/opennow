@@ -77,3 +77,49 @@ func TestParseEndpoint(t *testing.T) {
 		t.Error("path in endpoint should fail")
 	}
 }
+
+func TestSoleHTMLAndRename(t *testing.T) {
+	store := NewMemStore()
+	b := NewWithStore(Config{Name: "s3"}, store)
+	ctx := context.Background()
+	d, err := b.CreateRevision(ctx, "solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := "<h1>sole</h1>"
+	if err := b.Upload(ctx, d.ID, "page.html", strings.NewReader(body), int64(len(body))); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.Finalize(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	files, err := b.ListCurrentFiles(ctx, "solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hasIndex, hasPage bool
+	for _, f := range files {
+		if f.Path == "index.html" {
+			hasIndex = true
+		}
+		if f.Path == "page.html" {
+			hasPage = true
+		}
+	}
+	if !hasIndex || !hasPage {
+		t.Fatalf("files %+v", files)
+	}
+
+	meta, err := b.RenameSite(ctx, "solo", "renamed")
+	if err != nil || meta.Slug != "renamed" {
+		t.Fatalf("rename: %+v %v", meta, err)
+	}
+	if _, err := b.GetMeta(ctx, "solo"); err == nil {
+		t.Fatal("old slug still live")
+	}
+	rc, _, err := b.OpenCurrentFile(ctx, "renamed", "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.Close()
+}

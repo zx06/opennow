@@ -526,6 +526,9 @@ func (b *Backend) Finalize(ctx context.Context, revisionID string) (*site.Versio
 		return nil, "", err
 	}
 	filesDir := filepath.Join(b.draftDir(revisionID), "files")
+	if err := common.EnsureSoleHTMLIndex(filesDir); err != nil && !os.IsNotExist(err) {
+		return nil, "", err
+	}
 	var rels []string
 	err = filepath.WalkDir(filesDir, func(p string, de fs.DirEntry, err error) error {
 		if err != nil || de.IsDir() {
@@ -707,6 +710,55 @@ func (b *Backend) DeleteSite(ctx context.Context, slug string) error {
 	b.manifests.DeleteFunc(func(k string) bool { return strings.HasPrefix(k, pfx) })
 	return err
 }
+
+func (b *Backend) RenameSite(ctx context.Context, oldSlug, newSlug string) (*site.Meta, error) {
+	if !common.ValidID(oldSlug) || !common.ValidID(newSlug) {
+		return nil, storeerr.ErrInvalidPath
+	}
+	if oldSlug == newSlug {
+		return b.GetMeta(ctx, oldSlug)
+	}
+	meta, err := b.GetMeta(ctx, oldSlug)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := b.GetMeta(ctx, newSlug); err == nil {
+		return nil, storeerr.ErrConflict
+	} else if !errors.Is(err, storeerr.ErrNotFound) {
+		return nil, err
+	}
+	meta.Slug = newSlug
+	meta.UpdatedAt = time.Now().UTC()
+	oldRoot := strings.TrimSuffix(b.lay.SiteRoot(oldSlug), "/")
+	newRoot := strings.TrimSuffix(b.lay.SiteRoot(newSlug), "/")
+	_, err = b.commit(ctx, "opennow: rename "+oldSlug+" -> "+newSlug, func(h headState) ([]Change, error) {
+		entry, err := b.lookup(ctx, h.tree, oldRoot)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := b.lookup(ctx, h.tree, newRoot); err == nil {
+			return nil, storeerr.ErrConflict
+		} else if !errors.Is(err, storeerr.ErrNotFound) {
+			return nil, err
+		}
+		metaChange, err := jsonChange(b.lay.Meta(newSlug), meta)
+		if err != nil {
+			return nil, err
+		}
+		return []Change{
+			{Path: newRoot, Mode: "040000", Type: "tree", SHA: entry.SHA},
+			metaChange,
+			{Path: oldRoot, Mode: "040000", Type: "tree", Delete: true},
+		}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	pfx := oldSlug + "/"
+	b.manifests.DeleteFunc(func(k string) bool { return strings.HasPrefix(k, pfx) })
+	return meta, nil
+}
+
 
 func (b *Backend) ListVersions(ctx context.Context, slug string) ([]site.Version, error) {
 	if !common.ValidID(slug) {

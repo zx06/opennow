@@ -22,7 +22,7 @@ function adminApp() {
     sites: [], overview: null, toasts: [],
     dragging: false, publishSlug: '', uploading: false, uploadPct: 0, uploadLabel: '',
     detail: null, versions: [], openFiles: {}, tab: 'versions',
-    editPassword: '', clearPassword: false, editExpiry: '',
+    editPassword: '', clearPassword: false, editExpiry: '', editSlug: '',
 
     async init() {
       const params = new URLSearchParams(location.search);
@@ -214,6 +214,7 @@ function adminApp() {
       if (!keepTab) this.tab = 'versions';
       this.editPassword = ''; this.clearPassword = false;
       this.editExpiry = toLocalInput(this.detail.meta.expires_at);
+      this.editSlug = this.detail.meta.slug;
       if (!this.$refs.drawer.open) this.$refs.drawer.showModal();
     },
     closeDrawer() { this.$refs.drawer.close(); },
@@ -230,15 +231,19 @@ function adminApp() {
     async saveAccess() {
       const slug = this.detail.meta.slug;
       const body = {};
+      const nextSlug = (this.editSlug || '').trim();
+      if (nextSlug && nextSlug !== slug) body.slug = nextSlug;
       if (this.clearPassword) body.clear_password = true;
       else if (this.editPassword) body.password = this.editPassword;
       if (this.editExpiry) body.expires_at = new Date(this.editExpiry).toISOString();
       else body.clear_expiry = true;
       const r = await api('/sites/' + encodeURIComponent(slug), json(body, 'PATCH'));
       if (!r.ok) return this.toast(await errMsg(r), false);
-      this.toast('访问设置已保存');
+      const saved = await r.json();
+      const newSlug = (saved.meta && saved.meta.slug) || nextSlug || slug;
+      this.toast(newSlug !== slug ? `已重命名为 ${newSlug}` : '访问设置已保存');
       await this.refresh();
-      await this.openSite(slug, true);
+      await this.openSite(newSlug, true);
     },
     async rollback(versionId) {
       const slug = this.detail.meta.slug;

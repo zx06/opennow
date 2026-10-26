@@ -19,6 +19,10 @@ type Backend interface {
 	PutMeta(ctx context.Context, meta *site.Meta) error
 	ListSites(ctx context.Context) ([]site.Summary, error)
 	DeleteSite(ctx context.Context, slug string) error
+	// RenameSite moves a site to newSlug. Old slug is removed (no dual-live).
+	// Returns ErrConflict if newSlug already exists, ErrNotFound if old missing,
+	// ErrInvalidPath if either slug is illegal.
+	RenameSite(ctx context.Context, oldSlug, newSlug string) (*site.Meta, error)
 
 	ListVersions(ctx context.Context, slug string) ([]site.Version, error)
 	Rollback(ctx context.Context, slug, versionID string) (*site.Version, error)
