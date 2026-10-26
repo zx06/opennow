@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"html/template"
@@ -16,6 +17,7 @@ import (
 	"github.com/zx06/opennow/internal/api"
 	"github.com/zx06/opennow/internal/auth"
 	"github.com/zx06/opennow/internal/config"
+	"github.com/zx06/opennow/internal/site"
 	"github.com/zx06/opennow/internal/storage"
 	"github.com/zx06/opennow/internal/storage/storeerr"
 )
@@ -117,13 +119,19 @@ func (s *Server) serveRoot(w http.ResponseWriter, r *http.Request) {
 	s.serveVersionFile(w, r, slug, meta.CurrentVersion, rel)
 }
 
-// serveVersionFile streams rel from a version, falling back to rel/index.html.
+// serveVersionFile streams rel from a version, falling back to rel/index.html,
+// then (for a missing root index.html only) to the sole root-level HTML file.
 func (s *Server) serveVersionFile(w http.ResponseWriter, r *http.Request, slug, versionID, rel string) {
 	rc, info, err := s.store.OpenVersionFile(r.Context(), slug, versionID, rel)
 	if err != nil {
-		if errors.Is(err, storeerr.ErrNotFound) && !strings.HasSuffix(rel, "index.html") {
+		if errors.Is(err, storeerr.ErrNotFound) && !strings.HasSuffix(rel, "index.html") && !strings.HasSuffix(rel, "index.htm") {
 			rel = path.Join(strings.TrimSuffix(rel, "/"), "index.html")
 			rc, info, err = s.store.OpenVersionFile(r.Context(), slug, versionID, rel)
+		}
+	}
+	if err != nil && errors.Is(err, storeerr.ErrNotFound) && (rel == "index.html" || rel == "index.htm") {
+		if alt := s.soleRootHTML(r.Context(), slug, versionID); alt != "" {
+			rc, info, err = s.store.OpenVersionFile(r.Context(), slug, versionID, alt)
 		}
 	}
 	if err != nil {
@@ -137,6 +145,18 @@ func (s *Server) serveVersionFile(w http.ResponseWriter, r *http.Request, slug, 
 	defer rc.Close()
 	w.Header().Set("Content-Type", ContentType(info.Path))
 	io.Copy(w, rc)
+}
+
+func (s *Server) soleRootHTML(ctx context.Context, slug, versionID string) string {
+	files, err := s.store.ListVersionFiles(ctx, slug, versionID)
+	if err != nil {
+		return ""
+	}
+	paths := make([]string, 0, len(files))
+	for _, f := range files {
+		paths = append(paths, f.Path)
+	}
+	return site.SoleRootHTML(paths)
 }
 
 type routeMode int

@@ -243,6 +243,11 @@
           <template x-if="tab==='access'">
             <form class="form-grid" @submit.prevent="saveAccess">
               <div class="field">
+                <label for="edit-slug">站点 slug</label>
+                <input id="edit-slug" class="input" x-model.trim="editSlug" placeholder="新的 slug" autocomplete="off" spellcheck="false">
+                <span class="hint">保存后旧链接立即失效（不会双活或自动跳转）。勿含 / 或 ..。</span>
+              </div>
+              <div class="field">
                 <label>访问密码</label>
                 <div class="badges" style="margin-bottom:4px">
                   <span class="badge" :class="detail.meta.has_password ? 'badge-accent' : ''" x-text="detail.meta.has_password ? '🔒 已设置密码' : '未设置密码（公开访问）'"></span>

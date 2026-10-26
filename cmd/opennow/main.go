@@ -31,6 +31,8 @@ func main() {
 		runDelete(os.Args[2:])
 	case "rollback":
 		runRollback(os.Args[2:])
+	case "rename":
+		runRename(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -49,6 +51,7 @@ func usage() {
   opennow list [--server URL]
   opennow delete <slug> [--server URL]
   opennow rollback <slug> <version-id> [--server URL]
+  opennow rename <old-slug> <new-slug> [--server URL]
 
 环境变量:
   OPENNOW_API_KEY      管理 API 密钥
@@ -158,6 +161,21 @@ func runRollback(args []string) {
 	}
 	fmt.Println("rolled back")
 }
+
+func runRename(args []string) {
+	c, rest := apiClientFlags(args)
+	if len(rest) != 2 {
+		log.Fatal("用法: opennow rename <old-slug> <new-slug>")
+	}
+	out, err := c.RenameSite(rest[0], rest[1])
+	if err != nil {
+		log.Fatal(err)
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(out)
+}
+
 
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {

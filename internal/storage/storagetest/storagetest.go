@@ -26,6 +26,7 @@ type Backend interface {
 	PutMeta(ctx context.Context, meta *site.Meta) error
 	ListSites(ctx context.Context) ([]site.Summary, error)
 	DeleteSite(ctx context.Context, slug string) error
+	RenameSite(ctx context.Context, oldSlug, newSlug string) (*site.Meta, error)
 	ListVersions(ctx context.Context, slug string) ([]site.Version, error)
 	Rollback(ctx context.Context, slug, versionID string) (*site.Version, error)
 	OpenCurrentFile(ctx context.Context, slug, relPath string) (io.ReadCloser, *site.FileInfo, error)

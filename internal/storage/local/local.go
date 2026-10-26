@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/zx06/opennow/internal/site"
+	"github.com/zx06/opennow/internal/storage/common"
 	"github.com/zx06/opennow/internal/storage/storeerr"
 )
 
@@ -171,6 +172,9 @@ func (b *Backend) Finalize(ctx context.Context, revisionID string) (*site.Versio
 	if err := copyTree(srcFiles, vdir); err != nil && !os.IsNotExist(err) {
 		return nil, "", err
 	}
+	if err := common.EnsureSoleHTMLIndex(vdir); err != nil {
+		return nil, "", err
+	}
 	now := time.Now().UTC()
 	meta, err := b.readMeta(slug)
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -270,6 +274,43 @@ func (b *Backend) ListSites(ctx context.Context) ([]site.Summary, error) {
 func (b *Backend) DeleteSite(ctx context.Context, slug string) error {
 	return os.RemoveAll(b.siteDir(slug))
 }
+
+func (b *Backend) RenameSite(ctx context.Context, oldSlug, newSlug string) (*site.Meta, error) {
+	if !common.ValidID(oldSlug) || !common.ValidID(newSlug) {
+		return nil, ErrInvalidPath
+	}
+	if oldSlug == newSlug {
+		return b.readMeta(oldSlug)
+	}
+	oldDir := b.siteDir(oldSlug)
+	newDir := b.siteDir(newSlug)
+	if _, err := os.Stat(oldDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if _, err := os.Stat(newDir); err == nil {
+		return nil, storeerr.ErrConflict
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	meta, err := b.readMeta(oldSlug)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return nil, err
+	}
+	meta.Slug = newSlug
+	meta.UpdatedAt = time.Now().UTC()
+	if err := b.writeMeta(meta); err != nil {
+		_ = os.Rename(newDir, oldDir)
+		return nil, err
+	}
+	return meta, nil
+}
+
 
 func (b *Backend) ListVersions(ctx context.Context, slug string) ([]site.Version, error) {
 	vroot := filepath.Join(b.siteDir(slug), "versions")

@@ -35,7 +35,8 @@ mkdir -p mysite && echo '<!doctype html><h1>hi</h1>' > mysite/index.html
 
 - **发布**：创建修订 → 上传 → finalize 上线；CLI 与 `/_admin/` 后台
 - **路由**：路径 `/<slug>/` 与可选子域名 `{slug}.<BASE_DOMAIN>`
-- **访问控制**：站点密码、到期、版本回滚 / 预览 / 删除
+- **访问控制**：站点密码、到期、版本回滚 / 预览 / 删除、改 slug（旧链接立即失效）
+- **单 HTML 站点**：根目录仅有一个 `*.html`/`*.htm` 且无 `index.html` 时，访问 `/` 会回退到该文件；finalize 时会复制为 `index.html`（保留原文件）
 - **存储**：`local`（默认）/ S3 / R2 / GitHub 仓库（见下文）
 - **探活**：`GET /healthz` → `ok`
 
@@ -53,7 +54,7 @@ mkdir -p mysite && echo '<!doctype html><h1>hi</h1>' > mysite/index.html
 |------|------|
 | `opennow serve` | 启动 HTTP 服务 |
 | `opennow publish [--slug SLUG] [--server URL] <path>` | 发布文件或目录 |
-| `opennow list / delete / rollback` | 站点管理 |
+| `opennow list / delete / rename / rollback` | 站点管理 |
 
 CLI 环境变量：`OPENNOW_API_KEY`（必需）、`OPENNOW_SERVER`（默认 `http://127.0.0.1:8080`）。
 
@@ -210,6 +211,8 @@ CI 中 MinIO 集成测试以服务容器运行；GitHub 端到端测试仅在仓
 
 - 站点解锁 Cookie 值为 `过期时间.HMAC-SHA256(secret, slug, 密码哈希, 过期时间)`，服务端校验；修改或清除密码会使旧 Cookie 失效
 - 解锁 Cookie 路径：路径模式为 `/<slug>/`，子域名模式为 `/`
+- 改 slug：`PATCH /api/v1/sites/{slug}` 传 `{"slug":"new-slug"}`（或 CLI `opennow rename`）。校验非法字符与冲突（409）；目录/对象迁到新 slug 后旧 slug 删除，**旧链接不会 301**（避免双活）。
+
 - 站点 API 响应不再返回 `password_hash`，改为 `has_password`
 - 密码页返回 HTTP 401
 

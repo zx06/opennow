@@ -248,3 +248,26 @@ func (c *Client) Rollback(slug, versionID string) error {
 	}
 	return nil
 }
+
+func (c *Client) RenameSite(oldSlug, newSlug string) (map[string]any, error) {
+	if err := c.login(); err != nil {
+		return nil, err
+	}
+	body, _ := json.Marshal(map[string]string{"slug": newSlug})
+	req, _ := http.NewRequest(http.MethodPatch, c.BaseURL+"/api/v1/sites/"+oldSlug, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("rename failed: %s", b)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

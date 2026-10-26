@@ -8,4 +8,5 @@ var (
 	ErrDraftNotFound = errors.New("draft revision not found")
 	ErrInvalidPath   = errors.New("invalid path")
 	ErrTooLarge      = errors.New("file too large for storage backend")
+	ErrConflict     = errors.New("conflict")
 )

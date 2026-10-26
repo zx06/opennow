@@ -18,6 +18,7 @@ import (
 	"github.com/zx06/opennow/internal/config"
 	"github.com/zx06/opennow/internal/site"
 	"github.com/zx06/opennow/internal/storage"
+	"github.com/zx06/opennow/internal/storage/common"
 	"github.com/zx06/opennow/internal/storage/storeerr"
 )
 
@@ -254,6 +255,7 @@ func (h *Handler) patchSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
+		Slug          *string `json:"slug"`
 		Password      *string `json:"password"`
 		ClearPassword bool    `json:"clear_password"`
 		ExpiresAt     *string `json:"expires_at"`
@@ -262,6 +264,30 @@ func (h *Handler) patchSite(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "无效 JSON"})
 		return
+	}
+	if body.Slug != nil && *body.Slug != "" && *body.Slug != slug {
+		if !common.ValidID(*body.Slug) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "无效 slug"})
+			return
+		}
+		meta, err = h.store.RenameSite(r.Context(), slug, *body.Slug)
+		if err != nil {
+			if errors.Is(err, storeerr.ErrConflict) {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "slug 已被占用"})
+				return
+			}
+			if errors.Is(err, storeerr.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "站点不存在"})
+				return
+			}
+			if errors.Is(err, storeerr.ErrInvalidPath) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "无效 slug"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		slug = meta.Slug
 	}
 	if body.ClearPassword {
 		meta.PasswordHash = ""
@@ -291,9 +317,12 @@ func (h *Handler) patchSite(w http.ResponseWriter, r *http.Request) {
 			meta.ExpiresAt = &t
 		}
 	}
-	if err := h.store.PutMeta(r.Context(), meta); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	touched := body.ClearPassword || body.Password != nil || body.ClearExpiry || body.ExpiresAt != nil
+	if touched {
+		if err := h.store.PutMeta(r.Context(), meta); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"meta": viewMeta(meta)})
 }
