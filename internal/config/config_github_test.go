@@ -65,3 +65,15 @@ func TestGitHubOAuthConfigured(t *testing.T) {
 		t.Fatal("want true")
 	}
 }
+
+func TestFromEnv_AdminAPIKeyLoginAndDenyMessage(t *testing.T) {
+	t.Setenv("OPENNOW_ADMIN_API_KEY_LOGIN", "false")
+	t.Setenv("OPENNOW_GITHUB_DENY_MESSAGE", "仅内部账号")
+	c := FromEnv()
+	if !c.DisableAdminAPIKeyLogin {
+		t.Fatal("expected DisableAdminAPIKeyLogin")
+	}
+	if c.GitHubDenyMessage != "仅内部账号" {
+		t.Fatalf("deny %q", c.GitHubDenyMessage)
+	}
+}

@@ -6,8 +6,8 @@ function adminApp() {
 
   const LOGIN_ERRORS = {
     invalid_state: '登录状态已失效或被篡改，请重新登录',
-    exchange_failed: '向 GitHub 验证登录失败，请重试',
-    not_allowed: '该 GitHub 账号不在允许名单中',
+    exchange_failed: '向 GitHub 验证登录失败（常见原因：出网超时、代理未配置、Client Secret 错误）。请查看服务端日志后重试',
+    not_allowed: '', // filled dynamically
     denied: '已在 GitHub 取消授权',
     provider_error: 'GitHub 返回错误，请重试',
     not_configured: '服务端未配置 GitHub OAuth',
@@ -17,6 +17,7 @@ function adminApp() {
   return {
     ready: false, authed: false, busy: false, apiKey: '', query: '',
     githubEnabled: false, apiKeyLogin: true, githubLoginURL: '/api/v1/auth/github/login',
+    denyMessage: '', allowlist: [],
     loginError: '', user: null,
     sites: [], overview: null, toasts: [],
     dragging: false, publishSlug: '', uploading: false, uploadPct: 0, uploadLabel: '',
@@ -25,10 +26,11 @@ function adminApp() {
 
     async init() {
       const params = new URLSearchParams(location.search);
-      const err = params.get('login_error');
-      if (err) {
-        this.loginError = LOGIN_ERRORS[err] || ('登录失败：' + err);
+      let pendingErr = params.get('login_error');
+      const pendingUser = params.get('user') || '';
+      if (pendingErr) {
         params.delete('login_error');
+        params.delete('user');
         const qs = params.toString();
         history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
       }
@@ -39,8 +41,13 @@ function adminApp() {
           this.githubEnabled = !!j.github;
           this.apiKeyLogin = !!j.api_key;
           if (j.github_login) this.githubLoginURL = j.github_login;
+          this.denyMessage = j.deny_message || '';
+          this.allowlist = j.allowlist || [];
         }
       } catch (e) {}
+      if (pendingErr) {
+        this.loginError = this.formatLoginError(pendingErr, pendingUser);
+      }
       try {
         await this.loadMe();
         if (this.authed) await this.refresh();
@@ -67,6 +74,17 @@ function adminApp() {
       const r = await api('/auth/me');
       this.authed = r.ok;
       this.user = r.ok ? await r.json() : null;
+    },
+    formatLoginError(code, user) {
+      if (code === 'not_allowed') {
+        if (this.denyMessage) return this.denyMessage;
+        const who = user ? ('「' + user + '」') : '该 GitHub 账号';
+        const list = (this.allowlist && this.allowlist.length)
+          ? this.allowlist.join(', ')
+          : 'OPENNOW_GITHUB_ALLOWLIST';
+        return who + ' 不在管理后台允许名单中（当前允许：' + list + '）。如需开通请联系管理员。';
+      }
+      return LOGIN_ERRORS[code] || ('登录失败：' + code);
     },
     async login() {
       this.busy = true;

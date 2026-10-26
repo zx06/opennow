@@ -1,0 +1,32 @@
+# 可选：Docker Compose 示例（非必需）。黄金路径仍是：go build && ./opennow serve
+# 用法：cp .env.example .env && docker compose -f docker-compose.example.yml up --build
+
+services:
+  opennow:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      OPENNOW_ADDR: ":8080"
+      OPENNOW_DATA_DIR: /data
+      OPENNOW_STORAGE: local
+      OPENNOW_API_KEY: ${OPENNOW_API_KEY:-change-me}
+      OPENNOW_PUBLIC_URL: ${OPENNOW_PUBLIC_URL:-http://127.0.0.1:8080}
+      OPENNOW_GITHUB_CLIENT_ID: ${OPENNOW_GITHUB_CLIENT_ID:-}
+      OPENNOW_GITHUB_CLIENT_SECRET: ${OPENNOW_GITHUB_CLIENT_SECRET:-}
+      OPENNOW_GITHUB_ALLOWLIST: ${OPENNOW_GITHUB_ALLOWLIST:-zx06}
+      OPENNOW_ADMIN_API_KEY_LOGIN: ${OPENNOW_ADMIN_API_KEY_LOGIN:-true}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
+    volumes:
+      - opennow-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  opennow-data:

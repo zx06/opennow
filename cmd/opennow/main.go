@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -87,11 +86,7 @@ func runServe(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	adminSub, err := fs.Sub(embedadmin.Admin, "admin")
-	if err != nil {
-		log.Fatal(err)
-	}
-	srv := server.New(cfg, store, http.FileServer(http.FS(adminSub)))
+	srv := server.New(cfg, store, embedadmin.AdminHandler())
 	log.Printf("opennow listening on %s (admin %s)", cfg.Addr, cfg.AdminPrefix)
 	log.Fatal(http.ListenAndServe(cfg.Addr, srv.Handler()))
 }

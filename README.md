@@ -1,52 +1,43 @@
 # opennow
 
-自托管的 [here.now](https://here.now) 风格静态站点发布器：单个 Go 二进制（`CGO_ENABLED=0`），支持 CLI 与内嵌中文管理后台。
+自托管的 [here.now](https://here.now) 风格静态站点发布器：**单个 Go 二进制**（`CGO_ENABLED=0`），内嵌中文管理后台与 CLI。
 
-## 功能（MVP）
+## 黄金路径（推荐）
 
-- **发布流程**：创建修订 → 上传文件 → _finalize_ 上线
-- **路由**：子域名 `{slug}.<BASE_DOMAIN>` 与路径 `/<slug>/` 可同时启用
-- **访问控制**：站点密码（HMAC 签名 Cookie，按站点路径 scoped）、到期时间、版本回滚、删除
-- **历史版本预览**：任意历史版本可通过 `/_preview/<slug>/<versionId>/` 独立预览，不影响线上版本
-- **存储**：本地磁盘（默认）、S3 兼容对象存储（AWS S3 / MinIO 等）、Cloudflare R2、GitHub 仓库；见「[存储后端](#存储后端)」
-- **管理**：`/_admin/` 内嵌 Alpine.js（无 CDN、无前端构建）
-
-## 环境要求
-
-- **Go 1.26 或更高版本**（`go.mod` 声明 `go 1.26.0`；CI 与 Dockerfile 均使用 1.26）
-- 无需 CGO，无需 Node/前端构建工具
-
-## 快速开始（本地存储）
+只要有 **Go toolchain + 本仓库**，即可构建并跑起来（默认本地磁盘存储）。**不需要** Docker、Cloudflare Tunnel、QNAP 或自定义代理栈。
 
 ```bash
-# 构建
+# 1) 构建
 CGO_ENABLED=0 go build -o opennow ./cmd/opennow
 
-# 启动（需设置管理密钥）
-export OPENNOW_API_KEY=your-secret-key
+# 2) 启动（本地磁盘）
+export OPENNOW_API_KEY=dev-key
 export OPENNOW_DATA_DIR=./data
-export OPENNOW_PUBLIC_URL=http://127.0.0.1:8080   # 可选，用于 CLI/后台展示路径 URL
-# export OPENNOW_BASE_DOMAIN=xuzhuo.xyz         # 子域名模式需通配 DNS
-
+export OPENNOW_PUBLIC_URL=http://127.0.0.1:8080
 ./opennow serve
-```
+# 或: ./scripts/serve-local.sh
 
-准备站点目录（**请使用相对资源路径**；见下文「路径模式与资源链接」）：
+# 3) 探活
+curl -sf http://127.0.0.1:8080/healthz   # => ok
 
-```bash
-mkdir -p mysite
-echo '<!doctype html><html><body>Hello</body></html>' > mysite/index.html
-```
-
-发布：
-
-```bash
-export OPENNOW_API_KEY=your-secret-key
+# 4) 发布
+mkdir -p mysite && echo '<!doctype html><h1>hi</h1>' > mysite/index.html
 ./opennow publish --slug mysite ./mysite
+# 或: ./scripts/publish-local.sh mysite ./mysite
 ```
 
-浏览器访问：`http://127.0.0.1:8080/mysite/`  
-管理后台：`http://127.0.0.1:8080/_admin/`
+- 站点：`http://127.0.0.1:8080/mysite/`
+- 管理后台：`http://127.0.0.1:8080/_admin/`（先用 `OPENNOW_API_KEY` 登录；可选再配 GitHub OAuth，见附录）
+
+> 出网（GitHub OAuth / 远程存储）时，请使用标准环境变量 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`。opennow 不引入额外代理库。
+
+## 功能
+
+- **发布**：创建修订 → 上传 → finalize 上线；CLI 与 `/_admin/` 后台
+- **路由**：路径 `/<slug>/` 与可选子域名 `{slug}.<BASE_DOMAIN>`
+- **访问控制**：站点密码、到期、版本回滚 / 预览 / 删除
+- **存储**：`local`（默认）/ S3 / R2 / GitHub 仓库（见下文）
+- **探活**：`GET /healthz` → `ok`
 
 ## CLI
 
@@ -54,84 +45,28 @@ export OPENNOW_API_KEY=your-secret-key
 |------|------|
 | `opennow serve` | 启动 HTTP 服务 |
 | `opennow publish [--slug SLUG] [--server URL] <path>` | 发布文件或目录 |
-| `opennow list [--server URL]` | 列出站点 |
-| `opennow delete <slug>` | 删除站点 |
-| `opennow rollback <slug> <version-id>` | 回滚版本 |
+| `opennow list / delete / rollback` | 站点管理 |
 
-环境变量：`OPENNOW_API_KEY`（CLI/脚本必需；后台可改用 GitHub OAuth）、`OPENNOW_SERVER`（CLI 默认 `http://127.0.0.1:8080`）。
+CLI 环境变量：`OPENNOW_API_KEY`（必需）、`OPENNOW_SERVER`（默认 `http://127.0.0.1:8080`）。
 
-## 路径模式与资源链接
-
-在路径模式 `https://host/<slug>/` 下，HTML 中的 **根绝对路径**（如 `href="/style.css"`）会被浏览器请求为 `https://host/style.css`。opennow 会根据 **Referer** 尝试解析到对应站点的 `style.css`。
-
-**推荐**在站点内使用相对路径（`style.css`、`./assets/app.js`），可跨子域名/路径模式且更可靠。
-
-## 环境变量
+## 核心环境变量
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `OPENNOW_ADDR` | `:8080` | 监听地址 |
-| `OPENNOW_DATA_DIR` | `./data` | 本地存储目录 |
-| `OPENNOW_STORAGE` | `local` | 存储后端：`local` / `s3` / `r2` / `github`，各自配置见「存储后端」 |
-| `OPENNOW_API_KEY` | — | 管理 API 密钥（CLI / 脚本；后台在未配置 GitHub OAuth 时也可使用） |
-| `OPENNOW_GITHUB_CLIENT_ID` | — | 管理后台 GitHub OAuth App 的 Client ID |
-| `OPENNOW_GITHUB_CLIENT_SECRET` | — | 管理后台 GitHub OAuth App 的 Client Secret |
-| `OPENNOW_GITHUB_ALLOWLIST` | `zx06` | 允许登录后台的 GitHub 用户名，逗号分隔，大小写不敏感 |
-| `OPENNOW_BASE_DOMAIN` | — | 子域名后缀，如 `xuzhuo.xyz` |
-| `OPENNOW_PUBLIC_URL` | — | 公开 URL 前缀；GitHub 回调固定为 `{PUBLIC_URL}/api/v1/auth/github/callback` |
+| `OPENNOW_DATA_DIR` | `./data` | 本地数据目录 |
+| `OPENNOW_STORAGE` | `local` | `local` / `s3` / `r2` / `github` |
+| `OPENNOW_API_KEY` | — | 管理密钥（CLI；后台未配 GitHub 时也用） |
+| `OPENNOW_PUBLIC_URL` | — | 公开 URL 前缀（展示链接、OAuth 回调） |
+| `OPENNOW_BASE_DOMAIN` | — | 子域名后缀（可选） |
+| `OPENNOW_SECRET` | 自动生成 | Cookie / 预览令牌 HMAC 密钥 |
 | `OPENNOW_ADMIN_PREFIX` | `/_admin/` | 管理 UI 路径 |
-| `OPENNOW_ADMIN_HOST` | — | 独立管理域名，如 `admin.xuzhuo.xyz` |
-| `OPENNOW_PATH_MODE` | `true` | 路径路由 |
-| `OPENNOW_SUBDOMAIN_MODE` | `true` | 子域名路由 |
-| `OPENNOW_SECRET` | 自动生成 | 站点解锁 Cookie 与预览令牌的 HMAC 签名密钥；未设置时首次启动生成并保存到 `<DATA_DIR>/secret.key`（0600）。多实例部署需设置为同一值 |
 
+完整示例见 [`.env.example`](.env.example)。GitHub OAuth、远程存储缓存、Docker Compose、Cloudflare 等见文末 **附录（可选）**。
 
-## 管理后台登录（GitHub OAuth）
+## 路径模式与资源链接
 
-管理后台推荐使用 **GitHub OAuth**，仅允许名单内用户进入。CLI / 自动化脚本继续使用 `OPENNOW_API_KEY`（`POST /api/v1/auth/login` 换 session cookie），不走浏览器。
-
-### 创建 GitHub OAuth App
-
-1. 打开 GitHub → **Settings → Developer settings → OAuth Apps → New OAuth App**（或 Organization 下的 OAuth App）。
-2. **Authorization callback URL** 填：
-
-   ```
-   https://r.xuzhuo.xyz/api/v1/auth/github/callback
-   ```
-
-   （将主机名换成你的 `OPENNOW_PUBLIC_URL`；路径必须是 `/api/v1/auth/github/callback`。）
-3. 记下 Client ID，生成 Client Secret。
-
-> 也可用 GitHub App 的「OAuth credentials」；回调 URL 规则相同。本实现只请求 `read:user` scope，用 `/user` 的 `login` 做允许名单校验。
-
-### 配置示例
-
-```bash
-export OPENNOW_PUBLIC_URL=https://r.xuzhuo.xyz
-export OPENNOW_GITHUB_CLIENT_ID=Ov23xxxxxxxx
-export OPENNOW_GITHUB_CLIENT_SECRET=xxxxxxxx
-export OPENNOW_GITHUB_ALLOWLIST=zx06          # 默认即为 zx06；多人用逗号分隔
-export OPENNOW_API_KEY=your-secret-key       # 仍建议保留，供 CLI 使用
-```
-
-### 行为说明
-
-| 路由 | 说明 |
-|------|------|
-| `GET /api/v1/auth/options` | 返回 `{ github, api_key, github_login }`，供后台 UI 决定展示按钮 |
-| `GET /api/v1/auth/github/login` | 设置 HttpOnly `state` Cookie 后跳转 GitHub 授权页 |
-| `GET /api/v1/auth/github/callback` | 校验 state → 换 token → 取用户 → 允许名单 → 签发 `opennow_session` → 跳转 `/_admin/` |
-| `POST /api/v1/auth/login` | API Key 登录（CLI）；配置了 GitHub 时后台 UI 会弱化此入口 |
-
-安全要点：`state` 防 CSRF（Cookie 与 query 常量时间比较）、session Cookie 为 `HttpOnly` + `SameSite=Lax`，当 `OPENNOW_PUBLIC_URL` 为 `https://` 时自动加 `Secure`；回调地址固定由 `PUBLIC_URL` 拼装，不接受客户端覆盖。
-
-未配置 `OPENNOW_GITHUB_CLIENT_ID` / `SECRET` 时：GitHub 登录接口返回 503，后台仍可用 API Key（若已配置）。不在允许名单的账号会跳回 `/_admin/?login_error=not_allowed` 并提示。
-
-### 验证仅 zx06 可登录
-
-1. 用 GitHub 账号 **zx06** 走「使用 GitHub 登录」，应进入后台，顶栏显示用户名。
-2. 用其他 GitHub 账号授权，应看到「该 GitHub 账号不在允许名单中」，且无有效 session。
-3. CLI：`OPENNOW_API_KEY=... opennow …` 仍可发布，无需浏览器登录。
+路径模式 `https://host/<slug>/` 下，HTML 里的根绝对路径（如 `href="/style.css"`）会请求到 `https://host/style.css`。opennow 会按 **Referer** 尝试回源到对应站点。**推荐**站点内使用相对路径（`style.css`、`./assets/app.js`）。
 
 ## 存储后端
 
@@ -270,15 +205,56 @@ CI 中 MinIO 集成测试以服务容器运行；GitHub 端到端测试仅在仓
 - 站点 API 响应不再返回 `password_hash`，改为 `has_password`
 - 密码页返回 HTTP 401
 
-## Docker
+## 附录（可选）
+
+以下均为**可选叠加**，不是运行 opennow 的硬依赖。
+
+### A. 管理后台 GitHub OAuth
+
+配置后后台优先显示「使用 GitHub 登录」，仅允许名单内用户进入。CLI 仍用 `OPENNOW_API_KEY`。
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `OPENNOW_GITHUB_CLIENT_ID` | — | OAuth App Client ID |
+| `OPENNOW_GITHUB_CLIENT_SECRET` | — | Client Secret |
+| `OPENNOW_GITHUB_ALLOWLIST` | `zx06` | 逗号分隔，大小写不敏感 |
+| `OPENNOW_GITHUB_DENY_MESSAGE` | — | 非名单用户的自定义提示（可选） |
+| `OPENNOW_ADMIN_API_KEY_LOGIN` | `true` | `false` 时隐藏网页 API Key 登录（CLI 不受影响） |
+
+回调 URL 固定为：`{OPENNOW_PUBLIC_URL}/api/v1/auth/github/callback`  
+路由：`GET /api/v1/auth/github/login|callback`、`GET /api/v1/auth/options`  
+OAuth 出站超时默认 45s，失败会写服务端日志；代理走 `HTTP(S)_PROXY`。
+
+### B. 国内/代理构建（GOPROXY）
+
+若 `go mod download` 较慢，可自行设置（非项目要求）：
+
+```bash
+export GOPROXY=https://proxy.golang.org,direct
+# 或你常用的镜像
+```
+
+### C. Docker / Compose
 
 ```bash
 docker build -t opennow .
-docker run --rm -p 8080:8080 \
-  -e OPENNOW_API_KEY=your-secret-key \
-  -v opennow-data:/data \
-  opennow
+docker run --rm -p 8080:8080 -e OPENNOW_API_KEY=dev-key -v opennow-data:/data opennow
 ```
+
+可选 Compose（含 GitHub env 与 `/healthz` healthcheck）：见 [`docker-compose.example.yml`](docker-compose.example.yml)。
+
+### D. Cloudflare 缓存清理
+
+仅在你把站点放在 CF CDN 后需要主动 purge 时使用：[`scripts/optional-cf-purge-example.sh`](scripts/optional-cf-purge-example.sh)。**不是** opennow 运行时依赖。
+
+### E. 本地脚本
+
+| 脚本 | 说明 |
+|------|------|
+| `scripts/serve-local.sh` | 构建（如需要）并 `serve` |
+| `scripts/publish-local.sh` | 向本地服务发布 |
+| `scripts/demo.sh` | 端到端冒烟（含 `/healthz`） |
+| `scripts/optional-cf-purge-example.sh` | 可选 CF purge |
 
 ## 许可
 

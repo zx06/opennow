@@ -243,8 +243,12 @@ func TestGitHubCallback_Allowlist(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/github/callback?code=ok&state=st2", nil)
 	req.AddCookie(&http.Cookie{Name: oauthStateCookie, Value: "st2"})
 	mux.ServeHTTP(rr, req)
-	if !strings.Contains(rr.Header().Get("Location"), "login_error=not_allowed") {
-		t.Fatalf("loc %s", rr.Header().Get("Location"))
+	loc := rr.Header().Get("Location")
+	if !strings.Contains(loc, "login_error=not_allowed") {
+		t.Fatalf("loc %s", loc)
+	}
+	if !strings.Contains(loc, "user=someone-else") {
+		t.Fatalf("expected user in loc %s", loc)
 	}
 }
 
@@ -330,5 +334,16 @@ func TestAPIKeyLogin_StillWorks(t *testing.T) {
 	_ = json.Unmarshal(rr.Body.Bytes(), &me)
 	if me["method"] != "apikey" {
 		t.Fatalf("me=%v", me)
+	}
+}
+
+func TestLoginOptions_DisableAPIKeyUI(t *testing.T) {
+	_, mux := testHandler(t, config.Config{APIKey: "k", DisableAdminAPIKeyLogin: true})
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/auth/options", nil))
+	var body map[string]any
+	_ = json.Unmarshal(rr.Body.Bytes(), &body)
+	if body["api_key"] != false {
+		t.Fatalf("api_key=%v want false", body["api_key"])
 	}
 }
