@@ -3,27 +3,33 @@ name: CI
 on:
   push:
     branches: [main, 'cursor/**']
+    tags: ['v*']
   pull_request:
+  release:
+    types: [published]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: zx06/opennow
+  GO_VERSION: '1.26.x'
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          go-version: ${{ env.GO_VERSION }}
       - name: Vet
         run: CGO_ENABLED=0 go vet ./...
       - name: Test
         run: CGO_ENABLED=0 go test ./...
-      - name: Build linux/amd64
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o opennow ./cmd/opennow
-      - name: Docker build
-        run: docker build -t opennow:ci .
 
-  # S3 / R2 code path against a real MinIO server. MinIO no longer publishes
-  # community binaries or images, so it is built from source (and cached).
   s3-integration:
     runs-on: ubuntu-latest
     env:
@@ -32,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          go-version: ${{ env.GO_VERSION }}
       - name: Cache MinIO binary
         id: minio-cache
         uses: actions/cache@v4
@@ -59,8 +65,6 @@ jobs:
           OPENNOW_TEST_S3_SECRET_KEY: minioadmin
         run: CGO_ENABLED=0 go test ./internal/storage/s3/ -run Integration -v -count=1
 
-  # Optional: runs only when the repository defines the variable
-  # OPENNOW_TEST_GITHUB_REPO and the secret OPENNOW_TEST_GITHUB_TOKEN.
   github-e2e:
     if: ${{ vars.OPENNOW_TEST_GITHUB_REPO != '' }}
     runs-on: ubuntu-latest
@@ -68,9 +72,117 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.x'
+          go-version: ${{ env.GO_VERSION }}
       - name: GitHub storage E2E
         env:
           OPENNOW_TEST_GITHUB_REPO: ${{ vars.OPENNOW_TEST_GITHUB_REPO }}
           OPENNOW_TEST_GITHUB_TOKEN: ${{ secrets.OPENNOW_TEST_GITHUB_TOKEN }}
         run: CGO_ENABLED=0 go test ./internal/storage/github/ -run E2E -v -count=1
+
+  binaries:
+    needs: [test]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          out="opennow-${{ matrix.goos }}-${{ matrix.goarch }}"
+          go build -trimpath -ldflags="-s -w" -o "$out" ./cmd/opennow
+          echo "OUT=$out" >> "$GITHUB_ENV"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.OUT }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+
+  docker:
+    needs: [test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=tag
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (and push on non-PR)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Local/PR smoke: still load single-platform when not pushing
+          load: ${{ github.event_name == 'pull_request' }}
+
+  release-assets:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [binaries, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          ls -la
+          sha256sum opennow-* | tee SHA256SUMS
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/opennow-*
+            dist/SHA256SUMS
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
