@@ -39,6 +39,14 @@ mkdir -p mysite && echo '<!doctype html><h1>hi</h1>' > mysite/index.html
 - **存储**：`local`（默认）/ S3 / R2 / GitHub 仓库（见下文）
 - **探活**：`GET /healthz` → `ok`
 
+## 大文件上传（分块）
+
+管理后台与 CLI 默认按 **256 KiB** 分块 `PUT`（`X-OpenNow-Offset` / `X-OpenNow-Total`），避免经 Cloudflare Tunnel 等代理时整文件超过 ~100s 超时。进度条按已发送字节更新。
+
+- 小文件仍可一次 PUT（不带分块头）。
+- `POST /api/v1/publish` 响应含 `chunk_size`，客户端可按此值切分。
+- 拼装暂存在 `<DATA_DIR>/upload-parts/`，finalize 后清理。
+
 ## CLI
 
 | 命令 | 说明 |

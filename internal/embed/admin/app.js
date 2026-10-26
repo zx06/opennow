@@ -147,27 +147,59 @@ function adminApp() {
       try {
         this.uploadLabel = '创建修订…';
         const cr = await api('/publish', json({ slug: this.publishSlug || '' }));
-        if (!cr.ok) throw new Error(await errMsg(cr));
+        if (!cr.ok) throw new Error(await httpErr(cr));
         const rev = await cr.json();
-        let done = 0;
+        const chunkSize = rev.chunk_size > 0 ? rev.chunk_size : (256 * 1024);
+        const totalBytes = files.reduce((n, f) => n + (f.file.size || 0), 0) || 1;
+        let sentBytes = 0;
         for (const f of files) {
           this.uploadLabel = `上传 ${f.path}`;
-          const r = await api('/publish/' + rev.revision_id + '/files/' + encPath(f.path), { method: 'PUT', body: f.file });
-          if (!r.ok) throw new Error(`${f.path}: ${await errMsg(r)}`);
-          done++; this.uploadPct = Math.round(done / files.length * 95);
+          await this.uploadFileChunked(rev.revision_id, f.path, f.file, chunkSize, (n) => {
+            sentBytes += n;
+            this.uploadPct = Math.min(95, Math.round(sentBytes / totalBytes * 95));
+          });
         }
         this.uploadLabel = '上线中…';
         const fin = await api('/publish/' + rev.revision_id + '/finalize', { method: 'POST' });
-        if (!fin.ok) throw new Error(await errMsg(fin));
+        if (!fin.ok) throw new Error(await httpErr(fin));
         const out = await fin.json();
         this.uploadPct = 100;
         this.toast(`已发布 ${out.slug}（${files.length} 个文件）`);
         this.publishSlug = '';
         await this.refresh();
       } catch (e) {
-        this.toast('发布失败：' + (e.message || e), false);
+        this.toast('发布失败：' + formatUploadError(e), false);
       } finally {
         setTimeout(() => { this.uploading = false; }, 600);
+      }
+    },
+    async uploadFileChunked(revisionId, path, file, chunkSize, onBytes) {
+      const total = file.size || 0;
+      if (total === 0) {
+        const r = await api('/publish/' + revisionId + '/files/' + encPath(path), {
+          method: 'PUT', body: new Blob(),
+          headers: { 'Content-Type': 'application/octet-stream', 'X-OpenNow-Offset': '0', 'X-OpenNow-Total': '0' },
+        });
+        if (!r.ok) throw Object.assign(new Error(await httpErr(r)), { status: r.status });
+        return;
+      }
+      let offset = 0;
+      while (offset < total) {
+        const end = Math.min(offset + chunkSize, total);
+        const blob = file.slice(offset, end);
+        const r = await api('/publish/' + revisionId + '/files/' + encPath(path), {
+          method: 'PUT',
+          body: blob,
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-OpenNow-Offset': String(offset),
+            'X-OpenNow-Total': String(total),
+          },
+        });
+        if (!r.ok) throw Object.assign(new Error(`${path}: ${await httpErr(r)}`), { status: r.status });
+        const n = end - offset;
+        offset = end;
+        if (onBytes) onBytes(n);
       }
     },
 
@@ -271,4 +303,27 @@ function toLocalInput(t) {
 
 async function errMsg(r) {
   try { const j = await r.json(); return j.error || r.statusText; } catch { return r.statusText; }
+}
+
+async function httpErr(r) {
+  const msg = await errMsg(r);
+  if (r.status === 408 || r.status === 504 || r.status === 524) {
+    return `上传超时（HTTP ${r.status}）：${msg}。请重试；大文件已自动分块。`;
+  }
+  if (r.status >= 400 && r.status < 500) {
+    return `请求被拒绝（HTTP ${r.status}）：${msg}`;
+  }
+  if (r.status >= 500) {
+    return `服务端错误（HTTP ${r.status}）：${msg}`;
+  }
+  return msg;
+}
+
+function formatUploadError(e) {
+  const m = (e && e.message) ? String(e.message) : String(e);
+  if (e && e.name === 'AbortError') return '上传被中断或超时，请重试';
+  if (/failed to fetch|networkerror|load failed|timeout/i.test(m)) {
+    return '网络中断或代理超时（常见于 Cloudflare Tunnel 大文件）。已改为分块上传，请重试；若仍失败请检查隧道延迟。详情：' + m;
+  }
+  return m;
 }

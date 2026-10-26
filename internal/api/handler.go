@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -459,6 +460,7 @@ func (h *Handler) createPublish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"revision_id": draft.ID,
 		"slug":        draft.Slug,
+		"chunk_size":  DefaultUploadChunkBytes,
 	})
 }
 
@@ -467,25 +469,74 @@ func (h *Handler) uploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rev := r.PathValue("revisionId")
-	fp := r.PathValue("filepath")
-	fp = path.Clean(fp)
-	if err := h.store.Upload(r.Context(), rev, fp, r.Body, r.ContentLength); err != nil {
-		if errors.Is(err, storeerr.ErrDraftNotFound) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "修订不存在"})
+	fp := path.Clean(r.PathValue("filepath"))
+
+	offset, total, chunked, err := parseChunkMeta(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if !chunked {
+		if err := h.store.Upload(r.Context(), rev, fp, r.Body, r.ContentLength); err != nil {
+			h.writeUploadErr(w, err)
 			return
 		}
-		if errors.Is(err, storeerr.ErrTooLarge) {
-			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
-			return
-		}
-		if errors.Is(err, storeerr.ErrInvalidPath) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "非法路径"})
-			return
-		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+
+	complete, partFile, written, err := h.writeChunk(rev, fp, offset, total, r.Body, r.ContentLength)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if !complete {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":  "partial",
+			"offset":  offset,
+			"written": written,
+			"next":    offset + written,
+			"total":   total,
+		})
+		return
+	}
+
+	f, err := os.Open(partFile)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "无法读取拼装文件"})
+		return
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	upErr := h.store.Upload(r.Context(), rev, fp, f, st.Size())
+	f.Close()
+	_ = os.Remove(partFile)
+	if upErr != nil {
+		h.writeUploadErr(w, upErr)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "size": st.Size()})
+}
+
+func (h *Handler) writeUploadErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, storeerr.ErrDraftNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "修订不存在"})
+		return
+	}
+	if errors.Is(err, storeerr.ErrTooLarge) {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
+		return
+	}
+	if errors.Is(err, storeerr.ErrInvalidPath) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "非法路径"})
+		return
+	}
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 }
 
 func (h *Handler) finalizePublish(w http.ResponseWriter, r *http.Request) {
@@ -502,6 +553,7 @@ func (h *Handler) finalizePublish(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	h.clearUploadParts(rev)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version": v,
 		"slug":    slug,
