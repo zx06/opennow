@@ -29,24 +29,32 @@ type Config struct {
 	// GitHubAllowlist is the comma-separated list of GitHub logins allowed
 	// into the admin UI. Comparison is case-insensitive. Default: zx06.
 	GitHubAllowlist []string
+	// GitHubDenyMessage overrides the admin UI message when a user is not
+	// on the allowlist (OPENNOW_GITHUB_DENY_MESSAGE). Empty = built-in copy.
+	GitHubDenyMessage string
+	// DisableAdminAPIKeyLogin hides API-key login in the web admin when true
+	// (OPENNOW_ADMIN_API_KEY_LOGIN=false). CLI still uses POST /auth/login.
+	DisableAdminAPIKeyLogin bool
 }
 
 func FromEnv() Config {
 	c := Config{
-		Addr:               env("OPENNOW_ADDR", ":8080"),
-		DataDir:            env("OPENNOW_DATA_DIR", "./data"),
-		Backend:            env("OPENNOW_STORAGE", "local"),
-		APIKey:             os.Getenv("OPENNOW_API_KEY"),
-		BaseDomain:         os.Getenv("OPENNOW_BASE_DOMAIN"),
-		AdminPrefix:        env("OPENNOW_ADMIN_PREFIX", "/_admin/"),
-		AdminHost:          os.Getenv("OPENNOW_ADMIN_HOST"),
-		PublicURL:          strings.TrimRight(os.Getenv("OPENNOW_PUBLIC_URL"), "/"),
-		PathMode:           envBool("OPENNOW_PATH_MODE", true),
-		SubdomainMode:      envBool("OPENNOW_SUBDOMAIN_MODE", true),
-		Secret:             os.Getenv("OPENNOW_SECRET"),
-		GitHubClientID:     strings.TrimSpace(os.Getenv("OPENNOW_GITHUB_CLIENT_ID")),
-		GitHubClientSecret: strings.TrimSpace(os.Getenv("OPENNOW_GITHUB_CLIENT_SECRET")),
-		GitHubAllowlist:    parseAllowlist(os.Getenv("OPENNOW_GITHUB_ALLOWLIST")),
+		Addr:                    env("OPENNOW_ADDR", ":8080"),
+		DataDir:                 env("OPENNOW_DATA_DIR", "./data"),
+		Backend:                 env("OPENNOW_STORAGE", "local"),
+		APIKey:                  os.Getenv("OPENNOW_API_KEY"),
+		BaseDomain:              os.Getenv("OPENNOW_BASE_DOMAIN"),
+		AdminPrefix:             env("OPENNOW_ADMIN_PREFIX", "/_admin/"),
+		AdminHost:               os.Getenv("OPENNOW_ADMIN_HOST"),
+		PublicURL:               strings.TrimRight(os.Getenv("OPENNOW_PUBLIC_URL"), "/"),
+		PathMode:                envBool("OPENNOW_PATH_MODE", true),
+		SubdomainMode:           envBool("OPENNOW_SUBDOMAIN_MODE", true),
+		Secret:                  os.Getenv("OPENNOW_SECRET"),
+		GitHubClientID:          strings.TrimSpace(os.Getenv("OPENNOW_GITHUB_CLIENT_ID")),
+		GitHubClientSecret:      strings.TrimSpace(os.Getenv("OPENNOW_GITHUB_CLIENT_SECRET")),
+		GitHubAllowlist:         parseAllowlist(os.Getenv("OPENNOW_GITHUB_ALLOWLIST")),
+		GitHubDenyMessage:       strings.TrimSpace(os.Getenv("OPENNOW_GITHUB_DENY_MESSAGE")),
+		DisableAdminAPIKeyLogin: !envBool("OPENNOW_ADMIN_API_KEY_LOGIN", true),
 	}
 	if !strings.HasSuffix(c.AdminPrefix, "/") {
 		c.AdminPrefix += "/"

@@ -44,6 +44,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.api.Mount(mux)
 
+	mux.HandleFunc("GET /healthz", s.healthz)
+	mux.HandleFunc("GET /healthz/", s.healthz)
+
 	prefix := strings.TrimRight(s.cfg.AdminPrefix, "/")
 	mux.Handle(prefix+"/", http.StripPrefix(prefix, s.adminFS))
 	mux.Handle(prefix, http.RedirectHandler(prefix+"/", http.StatusPermanentRedirect))
@@ -51,6 +54,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/_preview/", s.servePreview)
 	mux.HandleFunc("/", s.serveRoot)
 	return mux
+}
+
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "ok\n")
 }
 
 func (s *Server) serveRoot(w http.ResponseWriter, r *http.Request) {

@@ -7,8 +7,8 @@
   <title>opennow 管理后台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%229%22 fill=%22%236366f1%22/%3E%3Ctext x=%2216%22 y=%2222%22 font-size=%2218%22 text-anchor=%22middle%22 fill=%22white%22 font-family=%22sans-serif%22 font-weight=%22800%22%3Eo%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="admin.css">
-  <script defer src="app.js"></script>
-  <script defer src="alpine.min.js"></script>
+  <script defer src="app.js" data-cfasync="false"></script>
+  <script defer src="alpine.min.js" data-cfasync="false"></script>
 </head>
 <body x-data="adminApp()" x-init="init()">
   <header class="topbar">
@@ -162,7 +162,16 @@
                 </tr>
               </template>
               <template x-if="!sites.length">
-                <tr><td colspan="5"><div class="empty"><div class="icon">📦</div>还没有站点，拖入文件开始发布吧</div></td></tr>
+                <tr><td colspan="5">
+                  <div class="empty onboarding">
+                    <div class="icon">📦</div>
+                    <strong>还没有站点</strong>
+                    <p>把含 <code>index.html</code> 的文件夹拖到上方发布区，或用 CLI：</p>
+                    <pre class="code-hint">export OPENNOW_API_KEY=…
+./opennow publish --slug my-site ./mysite</pre>
+                    <p class="sub">本地单二进制：<code>CGO_ENABLED=0 go build -o opennow ./cmd/opennow && ./opennow serve</code></p>
+                  </div>
+                </td></tr>
               </template>
             </tbody>
           </table>

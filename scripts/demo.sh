@@ -18,7 +18,7 @@ echo 'p{color:teal}' > /tmp/opennow-sample/style.css
 PID=$!
 trap 'kill $PID' EXIT
 for i in $(seq 1 30); do
-  curl -sf "$OPENNOW_PUBLIC_URL/" >/dev/null && break
+  curl -sf "$OPENNOW_PUBLIC_URL/healthz" >/dev/null && break
   sleep 0.2
 done
 

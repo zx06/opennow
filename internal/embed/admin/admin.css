@@ -144,6 +144,10 @@ td.actions { text-align: right; }
 .slug { font-weight: 650; font-size: 14px; }
 .sub { color: var(--muted); font-size: 12px; }
 .num { font-variant-numeric: tabular-nums; }
+.onboarding { text-align: center; padding: 28px 16px; }
+.onboarding strong { display: block; font-size: 15px; margin-bottom: 8px; }
+.onboarding p { color: var(--muted); margin: 8px 0; font-size: 13px; }
+.code-hint { text-align: left; display: inline-block; margin: 10px auto; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; color: var(--fg); }
 .empty { text-align: center; padding: 48px 20px; color: var(--muted); }
 .empty .icon { font-size: 30px; margin-bottom: 6px; }
 
