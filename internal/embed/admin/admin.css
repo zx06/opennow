@@ -105,6 +105,20 @@ h1, h2, h3 { margin: 0; line-height: 1.25; }
 .login p { color: var(--muted); margin: 0 0 22px; }
 .login form { display: grid; gap: 12px; }
 .login .btn { height: 40px; justify-content: center; }
+.login .callout { margin-bottom: 14px; }
+.callout { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.callout.callout-danger { background: var(--danger-soft); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 25%, transparent); }
+.oauth-list { display: grid; gap: 10px; }
+.btn-oauth { width: 100%; height: 42px; font-weight: 600; background: var(--fg); color: var(--surface); border-color: var(--fg); text-decoration: none; }
+.btn-oauth:hover { background: color-mix(in srgb, var(--fg) 86%, var(--accent)); border-color: transparent; color: var(--surface); }
+.divider { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; margin: 18px 0 14px; }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.user-chip { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px 0 4px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface); max-width: 220px; }
+.avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex: none; background: var(--accent-soft); }
+.avatar-fallback { display: grid; place-items: center; color: var(--accent); font-weight: 700; font-size: 13px; }
+.user-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.login .sub { color: var(--muted); font-size: 13px; }
+@media (max-width: 640px) { .hide-sm { display: none !important; } }
 
 /* dropzone */
 .dropzone { border: 2px dashed var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 34px 20px; text-align: center; transition: border-color .15s, background .15s; cursor: pointer; }
@@ -163,7 +177,6 @@ dialog::backdrop { background: rgba(15,23,42,.45); backdrop-filter: blur(2px); }
 .file a { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file .num { color: var(--muted); }
 .form-grid { display: grid; gap: 14px; }
-.callout { padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); font-size: 13px; }
 
 /* toast */
 .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 50; display: grid; gap: 8px; }

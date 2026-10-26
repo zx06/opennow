@@ -22,21 +22,31 @@ type Config struct {
 	SubdomainMode bool
 	// Secret signs unlock cookies and preview tokens (OPENNOW_SECRET).
 	Secret string
+
+	// GitHub OAuth for admin UI login (OPENNOW_GITHUB_CLIENT_*).
+	GitHubClientID     string
+	GitHubClientSecret string
+	// GitHubAllowlist is the comma-separated list of GitHub logins allowed
+	// into the admin UI. Comparison is case-insensitive. Default: zx06.
+	GitHubAllowlist []string
 }
 
 func FromEnv() Config {
 	c := Config{
-		Addr:          env("OPENNOW_ADDR", ":8080"),
-		DataDir:       env("OPENNOW_DATA_DIR", "./data"),
-		Backend:       env("OPENNOW_STORAGE", "local"),
-		APIKey:        os.Getenv("OPENNOW_API_KEY"),
-		BaseDomain:    os.Getenv("OPENNOW_BASE_DOMAIN"),
-		AdminPrefix:   env("OPENNOW_ADMIN_PREFIX", "/_admin/"),
-		AdminHost:     os.Getenv("OPENNOW_ADMIN_HOST"),
-		PublicURL:     strings.TrimRight(os.Getenv("OPENNOW_PUBLIC_URL"), "/"),
-		PathMode:      envBool("OPENNOW_PATH_MODE", true),
-		SubdomainMode: envBool("OPENNOW_SUBDOMAIN_MODE", true),
-		Secret:        os.Getenv("OPENNOW_SECRET"),
+		Addr:               env("OPENNOW_ADDR", ":8080"),
+		DataDir:            env("OPENNOW_DATA_DIR", "./data"),
+		Backend:            env("OPENNOW_STORAGE", "local"),
+		APIKey:             os.Getenv("OPENNOW_API_KEY"),
+		BaseDomain:         os.Getenv("OPENNOW_BASE_DOMAIN"),
+		AdminPrefix:        env("OPENNOW_ADMIN_PREFIX", "/_admin/"),
+		AdminHost:          os.Getenv("OPENNOW_ADMIN_HOST"),
+		PublicURL:          strings.TrimRight(os.Getenv("OPENNOW_PUBLIC_URL"), "/"),
+		PathMode:           envBool("OPENNOW_PATH_MODE", true),
+		SubdomainMode:      envBool("OPENNOW_SUBDOMAIN_MODE", true),
+		Secret:             os.Getenv("OPENNOW_SECRET"),
+		GitHubClientID:     strings.TrimSpace(os.Getenv("OPENNOW_GITHUB_CLIENT_ID")),
+		GitHubClientSecret: strings.TrimSpace(os.Getenv("OPENNOW_GITHUB_CLIENT_SECRET")),
+		GitHubAllowlist:    parseAllowlist(os.Getenv("OPENNOW_GITHUB_ALLOWLIST")),
 	}
 	if !strings.HasSuffix(c.AdminPrefix, "/") {
 		c.AdminPrefix += "/"
@@ -82,4 +92,36 @@ func (c *Config) EnsureSecret() error {
 	}
 	c.Secret = hex.EncodeToString(buf)
 	return os.WriteFile(p, []byte(c.Secret+"\n"), 0o600)
+}
+
+// GitHubOAuthConfigured reports whether GitHub admin login is fully wired.
+func (c Config) GitHubOAuthConfigured() bool {
+	return c.GitHubClientID != "" && c.GitHubClientSecret != ""
+}
+
+// parseAllowlist splits a comma-separated GitHub login allowlist.
+// Empty / whitespace-only input defaults to []string{"zx06"}.
+func parseAllowlist(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return []string{"zx06"}
+	}
+	return out
+}
+
+// AllowlistContains reports whether login is in the allowlist (case-insensitive).
+func AllowlistContains(list []string, login string) bool {
+	for _, a := range list {
+		if strings.EqualFold(a, login) {
+			return true
+		}
+	}
+	return false
 }

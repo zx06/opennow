@@ -98,6 +98,9 @@ func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/login", h.login)
 	mux.HandleFunc("POST /api/v1/auth/logout", h.logout)
 	mux.HandleFunc("GET /api/v1/auth/me", h.me)
+	mux.HandleFunc("GET /api/v1/auth/options", h.loginOptions)
+	mux.HandleFunc("GET /api/v1/auth/github/login", h.githubLogin)
+	mux.HandleFunc("GET /api/v1/auth/github/callback", h.githubCallback)
 
 	mux.HandleFunc("GET /api/v1/storage/overview", h.storageOverview)
 	mux.HandleFunc("GET /api/v1/sites", h.listSites)
@@ -130,19 +133,12 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "密钥无效"})
 		return
 	}
-	sid, err := h.sessions.create()
+	sid, err := h.sessions.create("apikey", "")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "会话创建失败"})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    sid,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   7 * 24 * 3600,
-	})
+	h.setSessionCookie(w, sid)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -150,15 +146,29 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		h.sessions.delete(c.Value)
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
+	h.clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
-	if !h.requireAdmin(w, r) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "未登录"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
+	sess, ok := h.sessions.get(c.Value)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "未登录"})
+		return
+	}
+	out := map[string]any{
+		"authenticated": true,
+		"method":        sess.method,
+	}
+	if sess.login != "" {
+		out["username"] = sess.login
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) storageOverview(w http.ResponseWriter, r *http.Request) {
@@ -518,7 +528,7 @@ func (h *Handler) AuthenticateAPIKey(apiKey string) (http.Header, error) {
 	if !constantTimeEqual(apiKey, h.cfg.APIKey) {
 		return nil, errors.New("invalid api key")
 	}
-	sid, err := h.sessions.create()
+	sid, err := h.sessions.create("apikey", "")
 	if err != nil {
 		return nil, err
 	}
