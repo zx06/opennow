@@ -17,6 +17,7 @@ import (
 	"github.com/zx06/opennow/internal/api"
 	"github.com/zx06/opennow/internal/auth"
 	"github.com/zx06/opennow/internal/config"
+	"github.com/zx06/opennow/internal/markdown"
 	"github.com/zx06/opennow/internal/site"
 	"github.com/zx06/opennow/internal/storage"
 	"github.com/zx06/opennow/internal/storage/storeerr"
@@ -119,16 +120,12 @@ func (s *Server) serveRoot(w http.ResponseWriter, r *http.Request) {
 	s.serveVersionFile(w, r, slug, meta.CurrentVersion, rel)
 }
 
-// serveVersionFile streams rel from a version, falling back to rel/index.html,
-// then (for a missing root index.html only) to the sole root-level HTML file.
+// serveVersionFile streams rel from a version, falling back to directory
+// index candidates (index.html, then Markdown indexes), then (for a missing
+// root index only) the sole root-level HTML file. Markdown is rendered to a
+// sanitized HTML page.
 func (s *Server) serveVersionFile(w http.ResponseWriter, r *http.Request, slug, versionID, rel string) {
-	rc, info, err := s.store.OpenVersionFile(r.Context(), slug, versionID, rel)
-	if err != nil {
-		if errors.Is(err, storeerr.ErrNotFound) && !strings.HasSuffix(rel, "index.html") && !strings.HasSuffix(rel, "index.htm") {
-			rel = path.Join(strings.TrimSuffix(rel, "/"), "index.html")
-			rc, info, err = s.store.OpenVersionFile(r.Context(), slug, versionID, rel)
-		}
-	}
+	rc, info, err := s.openVersionFile(r.Context(), slug, versionID, rel)
 	if err != nil && errors.Is(err, storeerr.ErrNotFound) && (rel == "index.html" || rel == "index.htm") {
 		if alt := s.soleRootHTML(r.Context(), slug, versionID); alt != "" {
 			rc, info, err = s.store.OpenVersionFile(r.Context(), slug, versionID, alt)
@@ -143,6 +140,12 @@ func (s *Server) serveVersionFile(w http.ResponseWriter, r *http.Request, slug, 
 		return
 	}
 	defer rc.Close()
+	if markdown.IsMarkdown(info.Path) {
+		if err := writeMarkdown(w, info.Path, rc); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
 	w.Header().Set("Content-Type", ContentType(info.Path))
 	io.Copy(w, rc)
 }
@@ -317,6 +320,12 @@ func (s *Server) tryRefererAsset(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	defer rc.Close()
+	if markdown.IsMarkdown(info.Path) {
+		if err := writeMarkdown(w, info.Path, rc); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return true
+	}
 	w.Header().Set("Content-Type", ContentType(info.Path))
 	io.Copy(w, rc)
 	return true
