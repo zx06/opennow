@@ -58,7 +58,7 @@ export OPENNOW_API_KEY=your-secret-key
 | `opennow delete <slug>` | 删除站点 |
 | `opennow rollback <slug> <version-id>` | 回滚版本 |
 
-环境变量：`OPENNOW_API_KEY`（必需，CLI/后台）、`OPENNOW_SERVER`（CLI 默认 `http://127.0.0.1:8080`）。
+环境变量：`OPENNOW_API_KEY`（CLI/脚本必需；后台可改用 GitHub OAuth）、`OPENNOW_SERVER`（CLI 默认 `http://127.0.0.1:8080`）。
 
 ## 路径模式与资源链接
 
@@ -73,14 +73,65 @@ export OPENNOW_API_KEY=your-secret-key
 | `OPENNOW_ADDR` | `:8080` | 监听地址 |
 | `OPENNOW_DATA_DIR` | `./data` | 本地存储目录 |
 | `OPENNOW_STORAGE` | `local` | 存储后端：`local` / `s3` / `r2` / `github`，各自配置见「存储后端」 |
-| `OPENNOW_API_KEY` | — | 管理 API 密钥 |
+| `OPENNOW_API_KEY` | — | 管理 API 密钥（CLI / 脚本；后台在未配置 GitHub OAuth 时也可使用） |
+| `OPENNOW_GITHUB_CLIENT_ID` | — | 管理后台 GitHub OAuth App 的 Client ID |
+| `OPENNOW_GITHUB_CLIENT_SECRET` | — | 管理后台 GitHub OAuth App 的 Client Secret |
+| `OPENNOW_GITHUB_ALLOWLIST` | `zx06` | 允许登录后台的 GitHub 用户名，逗号分隔，大小写不敏感 |
 | `OPENNOW_BASE_DOMAIN` | — | 子域名后缀，如 `xuzhuo.xyz` |
-| `OPENNOW_PUBLIC_URL` | — | 路径模式公开 URL 前缀 |
+| `OPENNOW_PUBLIC_URL` | — | 公开 URL 前缀；GitHub 回调固定为 `{PUBLIC_URL}/api/v1/auth/github/callback` |
 | `OPENNOW_ADMIN_PREFIX` | `/_admin/` | 管理 UI 路径 |
 | `OPENNOW_ADMIN_HOST` | — | 独立管理域名，如 `admin.xuzhuo.xyz` |
 | `OPENNOW_PATH_MODE` | `true` | 路径路由 |
 | `OPENNOW_SUBDOMAIN_MODE` | `true` | 子域名路由 |
 | `OPENNOW_SECRET` | 自动生成 | 站点解锁 Cookie 与预览令牌的 HMAC 签名密钥；未设置时首次启动生成并保存到 `<DATA_DIR>/secret.key`（0600）。多实例部署需设置为同一值 |
+
+
+## 管理后台登录（GitHub OAuth）
+
+管理后台推荐使用 **GitHub OAuth**，仅允许名单内用户进入。CLI / 自动化脚本继续使用 `OPENNOW_API_KEY`（`POST /api/v1/auth/login` 换 session cookie），不走浏览器。
+
+### 创建 GitHub OAuth App
+
+1. 打开 GitHub → **Settings → Developer settings → OAuth Apps → New OAuth App**（或 Organization 下的 OAuth App）。
+2. **Authorization callback URL** 填：
+
+   ```
+   https://r.xuzhuo.xyz/api/v1/auth/github/callback
+   ```
+
+   （将主机名换成你的 `OPENNOW_PUBLIC_URL`；路径必须是 `/api/v1/auth/github/callback`。）
+3. 记下 Client ID，生成 Client Secret。
+
+> 也可用 GitHub App 的「OAuth credentials」；回调 URL 规则相同。本实现只请求 `read:user` scope，用 `/user` 的 `login` 做允许名单校验。
+
+### 配置示例
+
+```bash
+export OPENNOW_PUBLIC_URL=https://r.xuzhuo.xyz
+export OPENNOW_GITHUB_CLIENT_ID=Ov23xxxxxxxx
+export OPENNOW_GITHUB_CLIENT_SECRET=xxxxxxxx
+export OPENNOW_GITHUB_ALLOWLIST=zx06          # 默认即为 zx06；多人用逗号分隔
+export OPENNOW_API_KEY=your-secret-key       # 仍建议保留，供 CLI 使用
+```
+
+### 行为说明
+
+| 路由 | 说明 |
+|------|------|
+| `GET /api/v1/auth/options` | 返回 `{ github, api_key, github_login }`，供后台 UI 决定展示按钮 |
+| `GET /api/v1/auth/github/login` | 设置 HttpOnly `state` Cookie 后跳转 GitHub 授权页 |
+| `GET /api/v1/auth/github/callback` | 校验 state → 换 token → 取用户 → 允许名单 → 签发 `opennow_session` → 跳转 `/_admin/` |
+| `POST /api/v1/auth/login` | API Key 登录（CLI）；配置了 GitHub 时后台 UI 会弱化此入口 |
+
+安全要点：`state` 防 CSRF（Cookie 与 query 常量时间比较）、session Cookie 为 `HttpOnly` + `SameSite=Lax`，当 `OPENNOW_PUBLIC_URL` 为 `https://` 时自动加 `Secure`；回调地址固定由 `PUBLIC_URL` 拼装，不接受客户端覆盖。
+
+未配置 `OPENNOW_GITHUB_CLIENT_ID` / `SECRET` 时：GitHub 登录接口返回 503，后台仍可用 API Key（若已配置）。不在允许名单的账号会跳回 `/_admin/?login_error=not_allowed` 并提示。
+
+### 验证仅 zx06 可登录
+
+1. 用 GitHub 账号 **zx06** 走「使用 GitHub 登录」，应进入后台，顶栏显示用户名。
+2. 用其他 GitHub 账号授权，应看到「该 GitHub 账号不在允许名单中」，且无有效 session。
+3. CLI：`OPENNOW_API_KEY=... opennow …` 仍可发布，无需浏览器登录。
 
 ## 存储后端
 

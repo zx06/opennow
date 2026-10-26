@@ -22,6 +22,10 @@
             <input class="input" type="search" x-model="query" placeholder="搜索站点…" @input.debounce.250ms="loadSites">
           </div>
           <button class="btn btn-ghost" type="button" @click="refresh" title="刷新">刷新</button>
+          <div class="user-chip" x-show="userLabel" :title="userTitle">
+            <span class="avatar avatar-fallback" x-text="userInitial"></span>
+            <span class="user-name hide-sm" x-text="userLabel"></span>
+          </div>
           <button class="btn" type="button" @click="logout">退出</button>
         </div>
       </template>
@@ -33,16 +37,25 @@
     <div class="login-wrap">
       <div class="card login">
         <h1>欢迎回来</h1>
-        <p>输入服务端配置的 <code>OPENNOW_API_KEY</code> 登录管理后台。</p>
-        <form @submit.prevent="login">
+        <p x-text="githubEnabled ? '使用 GitHub 账号登录管理后台（仅允许名单内用户）。' : '输入服务端配置的 OPENNOW_API_KEY 登录管理后台。'"></p>
+        <div class="callout callout-danger" x-show="loginError" x-text="loginError" role="alert"></div>
+        <div class="oauth-list" x-show="githubEnabled">
+          <a class="btn btn-oauth" :href="githubLoginURL" @click="busy = true">
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            <span>使用 GitHub 登录</span>
+          </a>
+        </div>
+        <div class="divider" x-show="githubEnabled && apiKeyLogin"><span>或使用 API 密钥</span></div>
+        <form @submit.prevent="login" x-show="apiKeyLogin">
           <div class="field">
             <label for="apikey">API 密钥</label>
-            <input id="apikey" class="input" type="password" x-model="apiKey" placeholder="••••••••" required autofocus>
+            <input id="apikey" class="input" type="password" x-model="apiKey" placeholder="••••••••" :required="apiKeyLogin" :autofocus="!githubEnabled" autocomplete="current-password">
           </div>
-          <button class="btn btn-primary" type="submit" :disabled="busy">
-            <span x-show="busy" class="spin"></span>登录
+          <button class="btn" :class="githubEnabled ? '' : 'btn-primary'" type="submit" :disabled="busy">
+            <span x-show="busy" class="spin"></span><span x-text="githubEnabled ? '使用密钥登录' : '登录'"></span>
           </button>
         </form>
+        <p class="sub" x-show="!githubEnabled && !apiKeyLogin" style="margin:0">服务端未启用任何网页登录方式，请配置 GitHub OAuth 或 <code>OPENNOW_API_KEY</code>。</p>
       </div>
     </div>
   </template>

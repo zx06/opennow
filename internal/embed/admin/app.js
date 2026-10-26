@@ -4,30 +4,84 @@ function adminApp() {
   const json = (body, method = 'POST') => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const encPath = (p) => p.split('/').map(encodeURIComponent).join('/');
 
+  const LOGIN_ERRORS = {
+    invalid_state: '登录状态已失效或被篡改，请重新登录',
+    exchange_failed: '向 GitHub 验证登录失败，请重试',
+    not_allowed: '该 GitHub 账号不在允许名单中',
+    denied: '已在 GitHub 取消授权',
+    provider_error: 'GitHub 返回错误，请重试',
+    not_configured: '服务端未配置 GitHub OAuth',
+    session_failed: '创建会话失败，请重试',
+  };
+
   return {
     ready: false, authed: false, busy: false, apiKey: '', query: '',
+    githubEnabled: false, apiKeyLogin: true, githubLoginURL: '/api/v1/auth/github/login',
+    loginError: '', user: null,
     sites: [], overview: null, toasts: [],
     dragging: false, publishSlug: '', uploading: false, uploadPct: 0, uploadLabel: '',
     detail: null, versions: [], openFiles: {}, tab: 'versions',
     editPassword: '', clearPassword: false, editExpiry: '',
 
     async init() {
-      try { const r = await api('/auth/me'); this.authed = r.ok; if (this.authed) await this.refresh(); } catch (e) {}
+      const params = new URLSearchParams(location.search);
+      const err = params.get('login_error');
+      if (err) {
+        this.loginError = LOGIN_ERRORS[err] || ('登录失败：' + err);
+        params.delete('login_error');
+        const qs = params.toString();
+        history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+      }
+      try {
+        const opt = await api('/auth/options');
+        if (opt.ok) {
+          const j = await opt.json();
+          this.githubEnabled = !!j.github;
+          this.apiKeyLogin = !!j.api_key;
+          if (j.github_login) this.githubLoginURL = j.github_login;
+        }
+      } catch (e) {}
+      try {
+        await this.loadMe();
+        if (this.authed) await this.refresh();
+      } catch (e) {}
       this.ready = true;
+    },
+    get userLabel() {
+      const u = this.user || {};
+      if (u.method === 'github') return u.username || 'GitHub';
+      if (u.method === 'apikey') return 'API 密钥';
+      return '';
+    },
+    get userTitle() {
+      const u = this.user || {};
+      if (u.method === 'github') return 'GitHub: ' + (u.username || '');
+      if (u.method === 'apikey') return 'API 密钥会话';
+      return '';
+    },
+    get userInitial() {
+      const l = this.userLabel || '?';
+      return l.trim().slice(0, 1).toUpperCase();
+    },
+    async loadMe() {
+      const r = await api('/auth/me');
+      this.authed = r.ok;
+      this.user = r.ok ? await r.json() : null;
     },
     async login() {
       this.busy = true;
       try {
         const r = await api('/auth/login', json({ api_key: this.apiKey }));
         if (!r.ok) return this.toast(await errMsg(r), false);
-        this.authed = true; this.apiKey = '';
+        this.apiKey = ''; this.loginError = '';
+        await this.loadMe();
         this.toast('登录成功');
         await this.refresh();
       } finally { this.busy = false; }
     },
     async logout() {
       await api('/auth/logout', { method: 'POST' });
-      this.authed = false; this.sites = []; this.overview = null;
+      this.authed = false; this.user = null; this.sites = []; this.overview = null;
     },
     async refresh() { await Promise.all([this.loadSites(), this.loadOverview()]); },
     backendLabel(b) {
