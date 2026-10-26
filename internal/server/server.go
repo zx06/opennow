@@ -32,15 +32,20 @@ type Server struct {
 	adminFS http.Handler
 }
 
-func New(cfg config.Config, store storage.Backend, adminFS http.Handler) *Server {
+// New builds the server. It fails when the login configuration is invalid.
+func New(cfg config.Config, store storage.Backend, adminFS http.Handler) (*Server, error) {
 	signer := auth.NewSigner(cfg.Secret)
+	h, err := api.New(cfg, store, signer, nil)
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
 		cfg:     cfg,
 		store:   store,
-		api:     api.New(cfg, store, signer),
+		api:     h,
 		signer:  signer,
 		adminFS: adminFS,
-	}
+	}, nil
 }
 
 func (s *Server) Handler() http.Handler {

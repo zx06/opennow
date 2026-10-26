@@ -1,90 +1,74 @@
 // opennow admin — Alpine.js component (vendored, no build step).
 function adminApp() {
-  const api = (p, opt) => fetch('/api/v1' + p, Object.assign({ credentials: 'same-origin' }, opt));
+  // Every request carries the CSRF header required for state-changing
+  // requests made with the session cookie.
+  const api = (p, opt = {}) => fetch('/api/v1' + p, Object.assign({ credentials: 'same-origin' }, opt, {
+    headers: Object.assign({ 'X-OpenNow-CSRF': '1' }, opt.headers || {}),
+  }));
+  const LOGIN_ERRORS = {
+    invalid_state: '登录状态已失效或被篡改，请重新登录',
+    exchange_failed: '向身份提供方验证登录失败，请重试或联系管理员',
+    not_allowed: '该账号不在允许登录的名单中',
+    denied_by_provider: '已在身份提供方取消授权',
+    provider_unavailable: '身份提供方暂时不可用，请稍后重试',
+  };
   const json = (body, method = 'POST') => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const encPath = (p) => p.split('/').map(encodeURIComponent).join('/');
 
-  const LOGIN_ERRORS = {
-    invalid_state: '登录状态已失效或被篡改，请重新登录',
-    exchange_failed: '向 GitHub 验证登录失败（常见原因：出网超时、代理未配置、Client Secret 错误）。请查看服务端日志后重试',
-    not_allowed: '', // filled dynamically
-    denied: '已在 GitHub 取消授权',
-    provider_error: 'GitHub 返回错误，请重试',
-    not_configured: '服务端未配置 GitHub OAuth',
-    session_failed: '创建会话失败，请重试',
-  };
-
   return {
     ready: false, authed: false, busy: false, apiKey: '', query: '',
-    githubEnabled: false, apiKeyLogin: true, githubLoginURL: '/api/v1/auth/github/login',
-    denyMessage: '', allowlist: [],
-    loginError: '', user: null,
+    user: null, providers: [], apiKeyLogin: true, cfAccess: false, denyMessage: '', loginError: '',
     sites: [], overview: null, toasts: [],
     dragging: false, publishSlug: '', uploading: false, uploadPct: 0, uploadLabel: '',
     detail: null, versions: [], openFiles: {}, tab: 'versions',
-    editPassword: '', clearPassword: false, editExpiry: '', editSlug: '',
+    editPassword: '', clearPassword: false, editExpiry: '',
 
     async init() {
       const params = new URLSearchParams(location.search);
-      let pendingErr = params.get('login_error');
-      const pendingUser = params.get('user') || '';
-      if (pendingErr) {
+      const err = params.get('login_error');
+      if (err) {
+        this.loginError = (err === 'not_allowed' && this.denyMessage) ? this.denyMessage : (LOGIN_ERRORS[err] || ('登录失败：' + err));
         params.delete('login_error');
-        params.delete('user');
         const qs = params.toString();
         history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
       }
       try {
-        const opt = await api('/auth/options');
-        if (opt.ok) {
-          const j = await opt.json();
-          this.githubEnabled = !!j.github;
-          this.apiKeyLogin = !!j.api_key;
-          if (j.github_login) this.githubLoginURL = j.github_login;
+        const pr = await api('/auth/providers');
+        if (pr.ok) {
+          const j = await pr.json();
+          this.providers = j.providers || [];
+          this.apiKeyLogin = !!j.api_key_login;
           this.denyMessage = j.deny_message || '';
-          this.allowlist = j.allowlist || [];
+          this.cfAccess = !!j.cf_access;
         }
       } catch (e) {}
-      if (pendingErr) {
-        this.loginError = this.formatLoginError(pendingErr, pendingUser);
-      }
-      try {
-        await this.loadMe();
-        if (this.authed) await this.refresh();
-      } catch (e) {}
+      try { await this.loadMe(); if (this.authed) await this.refresh(); } catch (e) {}
       this.ready = true;
-    },
-    get userLabel() {
-      const u = this.user || {};
-      if (u.method === 'github') return u.username || 'GitHub';
-      if (u.method === 'apikey') return 'API 密钥';
-      return '';
-    },
-    get userTitle() {
-      const u = this.user || {};
-      if (u.method === 'github') return 'GitHub: ' + (u.username || '');
-      if (u.method === 'apikey') return 'API 密钥会话';
-      return '';
-    },
-    get userInitial() {
-      const l = this.userLabel || '?';
-      return l.trim().slice(0, 1).toUpperCase();
     },
     async loadMe() {
       const r = await api('/auth/me');
       this.authed = r.ok;
       this.user = r.ok ? await r.json() : null;
     },
-    formatLoginError(code, user) {
-      if (code === 'not_allowed') {
-        if (this.denyMessage) return this.denyMessage;
-        const who = user ? ('「' + user + '」') : '该 GitHub 账号';
-        const list = (this.allowlist && this.allowlist.length)
-          ? this.allowlist.join(', ')
-          : 'OPENNOW_GITHUB_ALLOWLIST';
-        return who + ' 不在管理后台允许名单中（当前允许：' + list + '）。如需开通请联系管理员。';
-      }
-      return LOGIN_ERRORS[code] || ('登录失败：' + code);
+    loginWith(p) {
+      this.busy = true;
+      location.href = p.login_url + '?redirect=' + encodeURIComponent(location.pathname);
+    },
+    displayName() {
+      const u = this.user || {};
+      if (u.method === 'apikey' || u.method === 'bearer') return 'API 密钥';
+      return u.name || u.username || u.email || '已登录';
+    },
+    userTitle() {
+      const u = this.user || {};
+      return [u.username && (u.provider ? u.provider + ':' : '') + u.username, u.email].filter(Boolean).join(' · ');
+    },
+    initial() { return (this.displayName() || '?').trim().slice(0, 1).toUpperCase(); },
+    methodLabel() {
+      const u = this.user || {};
+      if (u.method === 'cf-access') return 'Cloudflare Access';
+      if (u.method === 'oauth') return (this.providers.find(p => p.name === u.provider)?.display_name) || u.provider;
+      return '密钥';
     },
     async login() {
       this.busy = true;
@@ -98,8 +82,11 @@ function adminApp() {
       } finally { this.busy = false; }
     },
     async logout() {
+      const viaCF = this.user?.method === 'cf-access';
       await api('/auth/logout', { method: 'POST' });
       this.authed = false; this.user = null; this.sites = []; this.overview = null;
+      // Cloudflare Access would sign the user straight back in; end that session too.
+      if (viaCF) location.href = '/cdn-cgi/access/logout';
     },
     async refresh() { await Promise.all([this.loadSites(), this.loadOverview()]); },
     backendLabel(b) {
@@ -147,59 +134,27 @@ function adminApp() {
       try {
         this.uploadLabel = '创建修订…';
         const cr = await api('/publish', json({ slug: this.publishSlug || '' }));
-        if (!cr.ok) throw new Error(await httpErr(cr));
+        if (!cr.ok) throw new Error(await errMsg(cr));
         const rev = await cr.json();
-        const chunkSize = rev.chunk_size > 0 ? rev.chunk_size : (256 * 1024);
-        const totalBytes = files.reduce((n, f) => n + (f.file.size || 0), 0) || 1;
-        let sentBytes = 0;
+        let done = 0;
         for (const f of files) {
           this.uploadLabel = `上传 ${f.path}`;
-          await this.uploadFileChunked(rev.revision_id, f.path, f.file, chunkSize, (n) => {
-            sentBytes += n;
-            this.uploadPct = Math.min(95, Math.round(sentBytes / totalBytes * 95));
-          });
+          const r = await api('/publish/' + rev.revision_id + '/files/' + encPath(f.path), { method: 'PUT', body: f.file });
+          if (!r.ok) throw new Error(`${f.path}: ${await errMsg(r)}`);
+          done++; this.uploadPct = Math.round(done / files.length * 95);
         }
         this.uploadLabel = '上线中…';
         const fin = await api('/publish/' + rev.revision_id + '/finalize', { method: 'POST' });
-        if (!fin.ok) throw new Error(await httpErr(fin));
+        if (!fin.ok) throw new Error(await errMsg(fin));
         const out = await fin.json();
         this.uploadPct = 100;
         this.toast(`已发布 ${out.slug}（${files.length} 个文件）`);
         this.publishSlug = '';
         await this.refresh();
       } catch (e) {
-        this.toast('发布失败：' + formatUploadError(e), false);
+        this.toast('发布失败：' + (e.message || e), false);
       } finally {
         setTimeout(() => { this.uploading = false; }, 600);
-      }
-    },
-    async uploadFileChunked(revisionId, path, file, chunkSize, onBytes) {
-      const total = file.size || 0;
-      if (total === 0) {
-        const r = await api('/publish/' + revisionId + '/files/' + encPath(path), {
-          method: 'PUT', body: new Blob(),
-          headers: { 'Content-Type': 'application/octet-stream', 'X-OpenNow-Offset': '0', 'X-OpenNow-Total': '0' },
-        });
-        if (!r.ok) throw Object.assign(new Error(await httpErr(r)), { status: r.status });
-        return;
-      }
-      let offset = 0;
-      while (offset < total) {
-        const end = Math.min(offset + chunkSize, total);
-        const blob = file.slice(offset, end);
-        const r = await api('/publish/' + revisionId + '/files/' + encPath(path), {
-          method: 'PUT',
-          body: blob,
-          headers: {
-            'Content-Type': 'application/octet-stream',
-            'X-OpenNow-Offset': String(offset),
-            'X-OpenNow-Total': String(total),
-          },
-        });
-        if (!r.ok) throw Object.assign(new Error(`${path}: ${await httpErr(r)}`), { status: r.status });
-        const n = end - offset;
-        offset = end;
-        if (onBytes) onBytes(n);
       }
     },
 
@@ -214,7 +169,6 @@ function adminApp() {
       if (!keepTab) this.tab = 'versions';
       this.editPassword = ''; this.clearPassword = false;
       this.editExpiry = toLocalInput(this.detail.meta.expires_at);
-      this.editSlug = this.detail.meta.slug;
       if (!this.$refs.drawer.open) this.$refs.drawer.showModal();
     },
     closeDrawer() { this.$refs.drawer.close(); },
@@ -231,19 +185,15 @@ function adminApp() {
     async saveAccess() {
       const slug = this.detail.meta.slug;
       const body = {};
-      const nextSlug = (this.editSlug || '').trim();
-      if (nextSlug && nextSlug !== slug) body.slug = nextSlug;
       if (this.clearPassword) body.clear_password = true;
       else if (this.editPassword) body.password = this.editPassword;
       if (this.editExpiry) body.expires_at = new Date(this.editExpiry).toISOString();
       else body.clear_expiry = true;
       const r = await api('/sites/' + encodeURIComponent(slug), json(body, 'PATCH'));
       if (!r.ok) return this.toast(await errMsg(r), false);
-      const saved = await r.json();
-      const newSlug = (saved.meta && saved.meta.slug) || nextSlug || slug;
-      this.toast(newSlug !== slug ? `已重命名为 ${newSlug}` : '访问设置已保存');
+      this.toast('访问设置已保存');
       await this.refresh();
-      await this.openSite(newSlug, true);
+      await this.openSite(slug, true);
     },
     async rollback(versionId) {
       const slug = this.detail.meta.slug;
@@ -308,27 +258,4 @@ function toLocalInput(t) {
 
 async function errMsg(r) {
   try { const j = await r.json(); return j.error || r.statusText; } catch { return r.statusText; }
-}
-
-async function httpErr(r) {
-  const msg = await errMsg(r);
-  if (r.status === 408 || r.status === 504 || r.status === 524) {
-    return `上传超时（HTTP ${r.status}）：${msg}。请重试；大文件已自动分块。`;
-  }
-  if (r.status >= 400 && r.status < 500) {
-    return `请求被拒绝（HTTP ${r.status}）：${msg}`;
-  }
-  if (r.status >= 500) {
-    return `服务端错误（HTTP ${r.status}）：${msg}`;
-  }
-  return msg;
-}
-
-function formatUploadError(e) {
-  const m = (e && e.message) ? String(e.message) : String(e);
-  if (e && e.name === 'AbortError') return '上传被中断或超时，请重试';
-  if (/failed to fetch|networkerror|load failed|timeout/i.test(m)) {
-    return '网络中断或代理超时（常见于 Cloudflare Tunnel 大文件）。已改为分块上传，请重试；若仍失败请检查隧道延迟。详情：' + m;
-  }
-  return m;
 }

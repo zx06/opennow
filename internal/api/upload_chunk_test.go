@@ -28,39 +28,30 @@ func newUploadTest(t *testing.T) (*Handler, *http.ServeMux, string) {
 		DataDir:     dir,
 		PublicURL:   "http://127.0.0.1",
 		AdminPrefix: "/_admin/",
+		Secret:      "test-secret-0123456789abcdef0123456789",
 	}
-	h := New(cfg, store, nil)
+	h, err := New(cfg, store, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	h.Mount(mux)
 	return h, mux, dir
 }
 
-func loginCookie(t *testing.T, mux *http.ServeMux) *http.Cookie {
-	t.Helper()
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"api_key":"k"}`))
-	req.Header.Set("Content-Type", "application/json")
-	mux.ServeHTTP(rr, req)
-	if rr.Code != 200 {
-		t.Fatalf("login %d %s", rr.Code, rr.Body.String())
-	}
-	for _, c := range rr.Result().Cookies() {
-		if c.Name == sessionCookie {
-			return c
-		}
-	}
-	t.Fatal("no session")
-	return nil
+// authReq attaches a bearer API key (no CSRF needed).
+func authReq(req *http.Request) *http.Request {
+	req.Header.Set("Authorization", "Bearer k")
+	return req
 }
 
 func TestChunkedUpload_AssemblesAndPublishes(t *testing.T) {
 	h, mux, _ := newUploadTest(t)
-	ck := loginCookie(t, mux)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/publish", strings.NewReader(`{"slug":"big"}`))
+	req.Header.Set("Authorization", "Bearer k")
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(ck)
 	mux.ServeHTTP(rr, req)
 	if rr.Code != 200 {
 		t.Fatalf("create %d %s", rr.Code, rr.Body.String())
@@ -90,7 +81,7 @@ func TestChunkedUpload_AssemblesAndPublishes(t *testing.T) {
 		req.Header.Set(hdrUploadOffset, strconv.FormatInt(offset, 10))
 		req.Header.Set(hdrUploadTotal, strconv.Itoa(len(payload)))
 		req.ContentLength = int64(len(part))
-		req.AddCookie(ck)
+		req.Header.Set("Authorization", "Bearer k")
 		mux.ServeHTTP(rr, req)
 		if rr.Code != 200 {
 			t.Fatalf("chunk @%d: %d %s", offset, rr.Code, rr.Body.String())
@@ -109,7 +100,7 @@ func TestChunkedUpload_AssemblesAndPublishes(t *testing.T) {
 
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/publish/"+created.RevisionID+"/finalize", nil)
-	req.AddCookie(ck)
+	req.Header.Set("Authorization", "Bearer k")
 	mux.ServeHTTP(rr, req)
 	if rr.Code != 200 {
 		t.Fatalf("finalize %d %s", rr.Code, rr.Body.String())
@@ -128,11 +119,10 @@ func TestChunkedUpload_AssemblesAndPublishes(t *testing.T) {
 
 func TestWholeFileUpload_StillWorks(t *testing.T) {
 	h, mux, _ := newUploadTest(t)
-	ck := loginCookie(t, mux)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/publish", strings.NewReader(`{"slug":"small"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(ck)
+	req.Header.Set("Authorization", "Bearer k")
 	mux.ServeHTTP(rr, req)
 	var created struct {
 		RevisionID string `json:"revision_id"`
@@ -142,7 +132,7 @@ func TestWholeFileUpload_StillWorks(t *testing.T) {
 	body := []byte("<h1>hi</h1>")
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/publish/"+created.RevisionID+"/files/index.html", bytes.NewReader(body))
-	req.AddCookie(ck)
+	req.Header.Set("Authorization", "Bearer k")
 	mux.ServeHTTP(rr, req)
 	if rr.Code != 200 {
 		t.Fatalf("upload %d %s", rr.Code, rr.Body.String())
@@ -150,7 +140,7 @@ func TestWholeFileUpload_StillWorks(t *testing.T) {
 
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/publish/"+created.RevisionID+"/finalize", nil)
-	req.AddCookie(ck)
+	req.Header.Set("Authorization", "Bearer k")
 	mux.ServeHTTP(rr, req)
 	if rr.Code != 200 {
 		t.Fatal(rr.Body.String())
@@ -168,11 +158,10 @@ func TestWholeFileUpload_StillWorks(t *testing.T) {
 
 func TestChunkOutOfOrderRejected(t *testing.T) {
 	_, mux, dir := newUploadTest(t)
-	ck := loginCookie(t, mux)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/publish", strings.NewReader(`{"slug":"x"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(ck)
+	req.Header.Set("Authorization", "Bearer k")
 	mux.ServeHTTP(rr, req)
 	var created struct {
 		RevisionID string `json:"revision_id"`
@@ -182,9 +171,9 @@ func TestChunkOutOfOrderRejected(t *testing.T) {
 	// skip first chunk — offset 100 with empty file should fail
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/publish/"+created.RevisionID+"/files/a.bin", bytes.NewReader([]byte("abcd")))
+	req.Header.Set("Authorization", "Bearer k")
 	req.Header.Set(hdrUploadOffset, "100")
 	req.Header.Set(hdrUploadTotal, "200")
-	req.AddCookie(ck)
 	mux.ServeHTTP(rr, req)
 	if rr.Code == 200 {
 		t.Fatalf("expected error, got %s", rr.Body.String())

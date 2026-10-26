@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -31,8 +32,6 @@ func main() {
 		runDelete(os.Args[2:])
 	case "rollback":
 		runRollback(os.Args[2:])
-	case "rename":
-		runRename(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -51,7 +50,6 @@ func usage() {
   opennow list [--server URL]
   opennow delete <slug> [--server URL]
   opennow rollback <slug> <version-id> [--server URL]
-  opennow rename <old-slug> <new-slug> [--server URL]
 
 环境变量:
   OPENNOW_API_KEY      管理 API 密钥
@@ -60,6 +58,11 @@ func usage() {
   OPENNOW_BASE_DOMAIN  子域名模式后缀（如 xuzhuo.xyz）
   OPENNOW_PUBLIC_URL   路径模式公开 URL 前缀
   OPENNOW_SECRET       Cookie/预览令牌签名密钥（默认自动生成 <DATA_DIR>/secret.key）
+  OPENNOW_OAUTH_PROVIDERS  OAuth2/OIDC 登录提供方列表（如 github,oidc），详见 README
+  OPENNOW_OAUTH_ALLOWED_USERS/EMAILS/DOMAINS/GITHUB_ORGS  登录白名单
+  OPENNOW_ADMIN_API_KEY_LOGIN  设为 false 禁用后台 API 密钥登录（CLI Bearer 不受影响）
+  OPENNOW_SESSION_TTL  后台会话有效期（默认 168h）
+  OPENNOW_CF_ACCESS_TEAM_DOMAIN / OPENNOW_CF_ACCESS_AUD  信任 Cloudflare Access 身份
   OPENNOW_STORAGE      存储后端：local（默认）| s3 | r2 | github
                        s3: OPENNOW_S3_ENDPOINT/REGION/BUCKET/PREFIX/ACCESS_KEY_ID/SECRET_ACCESS_KEY/PATH_STYLE
                        r2: OPENNOW_R2_ACCOUNT_ID/BUCKET/ACCESS_KEY_ID/SECRET_ACCESS_KEY/PREFIX
@@ -75,7 +78,10 @@ func runServe(args []string) {
 	dataDir := flagSet.String("data-dir", "", "storage data directory")
 	_ = flagSet.Parse(args)
 
-	cfg := config.FromEnv()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("登录配置无效: %v", err)
+	}
 	if *addr != "" {
 		cfg.Addr = *addr
 	}
@@ -89,7 +95,14 @@ func runServe(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	srv := server.New(cfg, store, embedadmin.AdminHandler())
+	adminSub, err := fs.Sub(embedadmin.Admin, "admin")
+	if err != nil {
+		log.Fatal(err)
+	}
+	srv, err := server.New(cfg, store, http.FileServer(http.FS(adminSub)))
+	if err != nil {
+		log.Fatalf("登录配置无效: %v", err)
+	}
 	log.Printf("opennow listening on %s (admin %s)", cfg.Addr, cfg.AdminPrefix)
 	log.Fatal(http.ListenAndServe(cfg.Addr, srv.Handler()))
 }
@@ -161,21 +174,6 @@ func runRollback(args []string) {
 	}
 	fmt.Println("rolled back")
 }
-
-func runRename(args []string) {
-	c, rest := apiClientFlags(args)
-	if len(rest) != 2 {
-		log.Fatal("用法: opennow rename <old-slug> <new-slug>")
-	}
-	out, err := c.RenameSite(rest[0], rest[1])
-	if err != nil {
-		log.Fatal(err)
-	}
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(out)
-}
-
 
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {

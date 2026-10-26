@@ -47,7 +47,10 @@ func TestSoleRootHTMLFallback(t *testing.T) {
 	}
 
 	cfg := config.Config{APIKey: "k", PathMode: true, AdminPrefix: "/_admin/", Secret: "test-secret-0123456789abcdef0123456789"}
-	srv := New(cfg, b, http.NotFoundHandler())
+	srv, err := New(cfg, b, http.NotFoundHandler())
+	if err != nil {
+		t.Fatal(err)
+	}
 	f := &fixture{t: t, h: srv.Handler(), store: b}
 
 	rec := f.do("GET", "/solo/", "")
