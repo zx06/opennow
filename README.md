@@ -242,14 +242,27 @@ export GOPROXY=https://proxy.golang.org,direct
 # 或你常用的镜像
 ```
 
-### C. Docker / Compose
+### C. Docker / GHCR（可选）
+
+单二进制仍是黄金路径。若要用镜像：
 
 ```bash
+# 预构建镜像（GitHub Actions 推送到 GHCR；main → latest + sha-…，tag → v*）
+docker pull ghcr.io/zx06/opennow:latest
+docker run --rm -p 8080:8080   -e OPENNOW_API_KEY=dev-key   -e OPENNOW_PUBLIC_URL=http://127.0.0.1:8080   -v opennow-data:/data   ghcr.io/zx06/opennow:latest
+
+# 或本地构建（不依赖 GHCR；GOPROXY 勿写死，需要时自行 export）
 docker build -t opennow .
 docker run --rm -p 8080:8080 -e OPENNOW_API_KEY=dev-key -v opennow-data:/data opennow
 ```
 
-可选 Compose（含 GitHub env 与 `/healthz` healthcheck）：见 [`docker-compose.example.yml`](docker-compose.example.yml)。
+- 镜像：`ghcr.io/zx06/opennow`（至少 `linux/amd64`）
+- 常用 tag：`latest`（main）、`sha-<短 SHA>`、`v*`（git tag）
+- 若 `docker pull` 401/403：到 GitHub → Packages → `opennow` → Package settings，将可见性设为 **Public**（首次推送后可能默认 private）
+- CI 还会上传各平台二进制 artifact；打 `v*` tag 时挂到 GitHub Release
+- 可选 Compose：[`docker-compose.example.yml`](docker-compose.example.yml)
+
+国内若 `go mod` / 基础镜像偏慢，可自行设置 `GOPROXY`、镜像加速，**不是**项目硬依赖。
 
 ### D. Cloudflare 缓存清理
 

@@ -3,7 +3,9 @@
 
 services:
   opennow:
+    # 二选一：本地 build，或直接用 GHCR
     build: .
+    # image: ghcr.io/zx06/opennow:latest
     ports:
       - "8080:8080"
     environment:
