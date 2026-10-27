@@ -67,7 +67,7 @@ type AuthConfig struct {
 	// OPENNOW_ADMIN_HOST.
 	BaseURL string `json:"base_url,omitempty"`
 	// DenyMessage is shown in the admin UI when login is rejected by the allowlist
-	// (OPENNOW_GITHUB_DENY_MESSAGE or OPENNOW_OAUTH_DENY_MESSAGE).
+	// (OPENNOW_OAUTH_DENY_MESSAGE).
 	DenyMessage string `json:"deny_message,omitempty"`
 }
 
@@ -168,14 +168,7 @@ func AuthFromEnv(getenv func(string) string) (AuthConfig, error) {
 	}
 	ac.CFAccess.AllowAny = parseBool(getenv("OPENNOW_CF_ACCESS_ALLOW_ANY"), ac.CFAccess.AllowAny)
 
-	// Legacy OPENNOW_GITHUB_* (from the GitHub-only admin login) maps onto a
-	// provider named "github" and allowlist entries so existing NAS .env keeps working.
-	applyGitHubLegacy(getenv, &ac)
-
 	if v := strings.TrimSpace(getenv("OPENNOW_OAUTH_DENY_MESSAGE")); v != "" {
-		ac.DenyMessage = v
-	}
-	if v := strings.TrimSpace(getenv("OPENNOW_GITHUB_DENY_MESSAGE")); v != "" && ac.DenyMessage == "" {
 		ac.DenyMessage = v
 	}
 	return ac, ac.Validate()
@@ -223,68 +216,6 @@ func (ac AuthConfig) Validate() error {
 		return fmt.Errorf("OPENNOW_CF_ACCESS_TEAM_DOMAIN and OPENNOW_CF_ACCESS_AUD must be set together")
 	}
 	return nil
-}
-
-// applyGitHubLegacy wires OPENNOW_GITHUB_CLIENT_ID/SECRET/ALLOWLIST into AuthConfig
-// when the modern OPENNOW_OAUTH_* provider list does not already define "github".
-func applyGitHubLegacy(getenv func(string) string, ac *AuthConfig) {
-	id := strings.TrimSpace(getenv("OPENNOW_GITHUB_CLIENT_ID"))
-	secret := strings.TrimSpace(getenv("OPENNOW_GITHUB_CLIENT_SECRET"))
-	if id != "" && secret != "" {
-		idx := -1
-		for i := range ac.Providers {
-			if ac.Providers[i].Name == "github" {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			ac.Providers = append(ac.Providers, ProviderConfig{
-				Name:         "github",
-				Type:         "github",
-				ClientID:     id,
-				ClientSecret: secret,
-				DisplayName:  "GitHub",
-			})
-		} else {
-			if ac.Providers[idx].ClientID == "" {
-				ac.Providers[idx].ClientID = id
-			}
-			if ac.Providers[idx].ClientSecret == "" {
-				ac.Providers[idx].ClientSecret = secret
-			}
-			if ac.Providers[idx].Type == "" {
-				ac.Providers[idx].Type = "github"
-			}
-			if ac.Providers[idx].DisplayName == "" {
-				ac.Providers[idx].DisplayName = "GitHub"
-			}
-		}
-	}
-
-	// Map OPENNOW_GITHUB_ALLOWLIST only when legacy credentials were used.
-	// Empty / unset defaults to zx06 (same as the previous GitHub-only login).
-	if id == "" || secret == "" {
-		return
-	}
-	raw := getenv("OPENNOW_GITHUB_ALLOWLIST")
-	logins := splitList(raw)
-	if len(logins) == 0 {
-		logins = []string{"zx06"}
-	}
-	for _, login := range logins {
-		entry := "github:" + login
-		found := false
-		for _, u := range ac.AllowedUsers {
-			if strings.EqualFold(u, entry) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			ac.AllowedUsers = append(ac.AllowedUsers, entry)
-		}
-	}
 }
 
 func splitList(s string) []string {
