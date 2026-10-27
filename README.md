@@ -153,9 +153,7 @@ export OPENNOW_API_KEY=your-secret-key
 
 ### 示例：GitHub
 
-在 GitHub → Settings → Developer settings → **OAuth Apps** 新建应用，Authorization callback URL 填 `https://now.example.com/api/v1/auth/github/callback`（与历史 `OPENNOW_GITHUB_*` 部署一致；也可用 `OPENNOW_OAUTH_PROVIDERS=github` + `OPENNOW_OAUTH_GITHUB_*`）。
-
-**兼容**：仅配置 `OPENNOW_GITHUB_CLIENT_ID` / `OPENNOW_GITHUB_CLIENT_SECRET`（及可选 `OPENNOW_GITHUB_ALLOWLIST`，默认 `zx06`）时，会自动注册名为 `github` 的提供方，无需改 NAS `.env`。
+在 GitHub → Settings → Developer settings → **OAuth Apps** 新建应用，Authorization callback URL 填 `https://now.example.com/api/v1/auth/github/callback`（名为 `github` 的提供方固定使用该路径，避免已有 OAuth App 改 URL）。登录只认统一的 `OPENNOW_OAUTH_*`：
 
 ```bash
 OPENNOW_PUBLIC_URL=https://now.example.com
@@ -163,9 +161,21 @@ OPENNOW_OAUTH_PROVIDERS=github
 OPENNOW_OAUTH_GITHUB_CLIENT_ID=Iv1.xxxxxxxx
 OPENNOW_OAUTH_GITHUB_CLIENT_SECRET=xxxxxxxx
 OPENNOW_OAUTH_ALLOWED_USERS=github:zx06
-# 可选：组织成员均可登录（需组织允许该 OAuth App 访问）
+# 可选：拒绝提示 / 组织成员均可登录（需组织允许该 OAuth App 访问）
+# OPENNOW_OAUTH_DENY_MESSAGE=仅内部账号
 # OPENNOW_OAUTH_ALLOWED_GITHUB_ORGS=my-org
 ```
+
+**迁移**（旧登录变量已移除，不再映射）：
+
+| 旧（已失效） | 新 |
+|--------------|----|
+| `OPENNOW_GITHUB_CLIENT_ID` | `OPENNOW_OAUTH_GITHUB_CLIENT_ID`（并设 `OPENNOW_OAUTH_PROVIDERS=github`） |
+| `OPENNOW_GITHUB_CLIENT_SECRET` | `OPENNOW_OAUTH_GITHUB_CLIENT_SECRET` |
+| `OPENNOW_GITHUB_ALLOWLIST=zx06` | `OPENNOW_OAUTH_ALLOWED_USERS=github:zx06` |
+| `OPENNOW_GITHUB_DENY_MESSAGE` | `OPENNOW_OAUTH_DENY_MESSAGE` |
+
+存储后端的 `OPENNOW_GITHUB_TOKEN` / `OPENNOW_GITHUB_REPO` / `OPENNOW_GITHUB_BRANCH` 等**不受影响**（那是 GitHub storage，不是登录）。
 
 GitHub 不是 OIDC 提供方，opennow 使用 `/user` 与 `/user/emails`（仅取已验证的主邮箱）获取身份。
 
